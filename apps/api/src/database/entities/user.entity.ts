@@ -1,4 +1,11 @@
-import { Column, CreateDateColumn, Entity, OneToMany, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  OneToMany,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 import { Task } from './task.entity';
 import { TeamMember } from './team-member.entity';
 import { Team } from './team.entity';
@@ -11,7 +18,7 @@ export class User {
   @Column({ length: 255, unique: true })
   email!: string;
 
-  @Column({ length: 100 })
+  @Column({ name: 'display_name', length: 100 })
   displayName!: string;
 
   @Column({ name: 'password_hash', select: false })

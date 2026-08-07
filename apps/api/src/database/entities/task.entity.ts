@@ -1,4 +1,12 @@
-import { Column, CreateDateColumn, Entity, ManyToOne, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  JoinColumn,
+  ManyToOne,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 import { Project } from './project.entity';
 import { User } from './user.entity';
 
@@ -32,9 +40,14 @@ export class Task {
   priority!: TaskPriority;
 
   @ManyToOne(() => Project, (project) => project.tasks, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'project_id' })
   project!: Project;
 
-  @ManyToOne(() => User, (user) => user.assignedTasks, { nullable: true, onDelete: 'SET NULL' })
+  @ManyToOne(() => User, (user) => user.assignedTasks, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
+  @JoinColumn({ name: 'assignee_id' })
   assignee!: User | null;
 
   @Column({ name: 'due_date', type: 'timestamptz', nullable: true })

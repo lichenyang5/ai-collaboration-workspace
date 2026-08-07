@@ -1,4 +1,12 @@
-import { Column, CreateDateColumn, Entity, ManyToOne, OneToMany, PrimaryGeneratedColumn } from 'typeorm';
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  JoinColumn,
+  ManyToOne,
+  OneToMany,
+  PrimaryGeneratedColumn,
+} from 'typeorm';
 import { Project } from './project.entity';
 import { TeamMember } from './team-member.entity';
 import { User } from './user.entity';
@@ -12,6 +20,7 @@ export class Team {
   name!: string;
 
   @ManyToOne(() => User, (user) => user.createdTeams, { onDelete: 'RESTRICT' })
+  @JoinColumn({ name: 'created_by_id' })
   createdBy!: User;
 
   @OneToMany(() => TeamMember, (member) => member.team)

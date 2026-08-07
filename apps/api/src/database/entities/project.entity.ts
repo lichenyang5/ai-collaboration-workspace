@@ -1,4 +1,13 @@
-import { Column, CreateDateColumn, Entity, ManyToOne, OneToMany, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  JoinColumn,
+  ManyToOne,
+  OneToMany,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 import { Task } from './task.entity';
 import { Team } from './team.entity';
 
@@ -14,6 +23,7 @@ export class Project {
   description!: string;
 
   @ManyToOne(() => Team, (team) => team.projects, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'team_id' })
   team!: Team;
 
   @OneToMany(() => Task, (task) => task.project)

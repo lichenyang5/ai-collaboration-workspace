@@ -1,4 +1,12 @@
-import { Column, CreateDateColumn, Entity, ManyToOne, PrimaryGeneratedColumn, Unique } from 'typeorm';
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  JoinColumn,
+  ManyToOne,
+  PrimaryGeneratedColumn,
+  Unique,
+} from 'typeorm';
 import { Team } from './team.entity';
 import { User } from './user.entity';
 
@@ -14,9 +22,11 @@ export class TeamMember {
   id!: string;
 
   @ManyToOne(() => Team, (team) => team.members, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'team_id' })
   team!: Team;
 
   @ManyToOne(() => User, (user) => user.teamMemberships, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'user_id' })
   user!: User;
 
   @Column({ type: 'enum', enum: TeamMemberRole })
