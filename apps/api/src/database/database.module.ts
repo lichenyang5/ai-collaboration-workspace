@@ -1,6 +1,7 @@
-import { Module, type ModuleMetadata } from '@nestjs/common';
+import { Global, Module, type ModuleMetadata, type Provider } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { DataSource } from 'typeorm';
 import { Project } from './entities/project.entity';
 import { Task } from './entities/task.entity';
 import { TeamMember } from './entities/team-member.entity';
@@ -11,6 +12,7 @@ const entities = [User, Team, TeamMember, Project, Task];
 const databaseImports: NonNullable<ModuleMetadata['imports']> = [
   ConfigModule.forRoot({ isGlobal: true }),
 ];
+const testDatabaseProviders: Provider[] = [];
 
 if (process.env.NODE_ENV !== 'test') {
   databaseImports.push(
@@ -24,9 +26,14 @@ if (process.env.NODE_ENV !== 'test') {
       }),
     }),
   );
+} else {
+  testDatabaseProviders.push({ provide: DataSource, useValue: {} });
 }
 
+@Global()
 @Module({
   imports: databaseImports,
+  providers: testDatabaseProviders,
+  exports: testDatabaseProviders,
 })
 export class DatabaseModule {}
