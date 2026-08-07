@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Get,
   Param,
   Post,
   UseGuards,
@@ -27,5 +28,13 @@ export class ProjectsController {
     @CurrentUser() user: CurrentUserPayload,
   ) {
     return this.projectsService.createProject(input, teamId, user.id);
+  }
+
+  @Get()
+  getProjects(
+    @Param('teamId') teamId: string,
+    @CurrentUser() user: CurrentUserPayload,
+  ) {
+    return this.projectsService.getProjectsForTeam(teamId, user.id);
   }
 }

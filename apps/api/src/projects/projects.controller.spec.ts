@@ -18,6 +18,9 @@ describe('Project creation', () => {
     const projectRepository = {
       create: jest.fn((value: object) => ({ id: 'project-1', ...value })),
       save: jest.fn(async (value: object) => value),
+      find: jest.fn(async () => [
+        { id: 'project-1', name: '协同工作台 MVP', description: '第一阶段交付' },
+      ]),
     };
     const membershipRepository = {
       findOne: jest.fn(async () => ({ role: TeamMemberRole.Owner })),
@@ -53,5 +56,20 @@ describe('Project creation', () => {
 
     expect(response.status).toBe(201);
     expect(response.body).toMatchObject({ id: 'project-1', name: '协同工作台 MVP' });
+  });
+  it('returns projects for a team that the user belongs to', async () => {
+    const token = new JwtService({ secret: 'test-secret' }).sign({ sub: 'user-1' });
+    const response = await request(app.getHttpServer())
+      .get('/api/teams/team-1/projects')
+      .set('Cookie', `access_token=${token}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([
+      {
+        id: 'project-1',
+        name: '协同工作台 MVP',
+        description: '第一阶段交付',
+      },
+    ]);
   });
 });
