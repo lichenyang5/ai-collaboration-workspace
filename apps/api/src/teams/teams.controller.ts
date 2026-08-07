@@ -1,4 +1,11 @@
-import { Body, Controller, Post, UseGuards, ValidationPipe } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Post,
+  UseGuards,
+  ValidationPipe,
+} from '@nestjs/common';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard, type CurrentUserPayload } from '../common/guards/jwt-auth.guard';
 import { CreateTeamDto } from './dto/create-team.dto';
@@ -15,5 +22,10 @@ export class TeamsController {
     @CurrentUser() user: CurrentUserPayload,
   ) {
     return this.teamsService.createTeam(input, user.id);
+  }
+
+  @Get()
+  getTeams(@CurrentUser() user: CurrentUserPayload) {
+    return this.teamsService.getTeamsForUser(user.id);
   }
 }

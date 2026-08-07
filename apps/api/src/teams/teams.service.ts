@@ -1,10 +1,15 @@
 import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { TeamMemberRole } from '../database/entities/team-member.entity';
-import { TeamMember } from '../database/entities/team-member.entity';
+import { TeamMember, TeamMemberRole } from '../database/entities/team-member.entity';
 import { Team } from '../database/entities/team.entity';
 import { User } from '../database/entities/user.entity';
 import { CreateTeamDto } from './dto/create-team.dto';
+
+export interface TeamSummary {
+  id: string;
+  name: string;
+  role: TeamMemberRole;
+}
 
 @Injectable()
 export class TeamsService {
@@ -27,5 +32,20 @@ export class TeamsService {
       await teamMemberRepository.save(ownerMembership);
       return savedTeam;
     });
+  }
+
+  async getTeamsForUser(userId: string): Promise<TeamSummary[]> {
+    const teamMemberRepository = this.dataSource.getRepository(TeamMember);
+    const memberships = await teamMemberRepository.find({
+      where: { user: { id: userId } },
+      relations: { team: true },
+      order: { createdAt: 'ASC' },
+    });
+
+    return memberships.map((membership) => ({
+      id: membership.team.id,
+      name: membership.team.name,
+      role: membership.role,
+    }));
   }
 }

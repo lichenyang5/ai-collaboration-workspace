@@ -22,6 +22,9 @@ describe('Team creation', () => {
     const memberRepository = {
       create: jest.fn((value: object) => value),
       save: jest.fn(async (value: object) => value),
+      find: jest.fn(async () => [
+        { role: 'owner', team: { id: 'team-1', name: '产品研发组' } },
+      ]),
     };
     const manager = {
       getRepository: jest.fn((entity: unknown) =>
@@ -35,7 +38,12 @@ describe('Team creation', () => {
       .overrideProvider(getRepositoryToken(User))
       .useValue({})
       .overrideProvider(getDataSourceToken())
-      .useValue({ transaction: jest.fn((callback: (value: typeof manager) => unknown) => callback(manager)) })
+      .useValue({
+        transaction: jest.fn((callback: (value: typeof manager) => unknown) => callback(manager)),
+        getRepository: jest.fn((entity: unknown) =>
+          entity === TeamMember ? memberRepository : teamRepository,
+        ),
+      })
       .compile();
 
     app = moduleRef.createNestApplication();
@@ -57,5 +65,16 @@ describe('Team creation', () => {
 
     expect(response.status).toBe(201);
     expect(response.body).toMatchObject({ id: 'team-1', name: '产品研发组' });
+  });
+  it('returns only teams that belong to the authenticated user', async () => {
+    const token = new JwtService({ secret: 'test-secret' }).sign({ sub: 'user-1' });
+    const response = await request(app.getHttpServer())
+      .get('/api/teams')
+      .set('Cookie', `access_token=${token}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([
+      { id: 'team-1', name: '产品研发组', role: 'owner' },
+    ]);
   });
 });
