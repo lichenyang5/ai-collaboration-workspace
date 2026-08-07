@@ -167,33 +167,39 @@ export function TaskBoardPage() {
           </div>
         </div>
         <form className="task-create-form" noValidate onSubmit={handleCreateTask}>
-          <label htmlFor="task-title">任务标题</label>
-          <input
-            id="task-title"
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            maxLength={200}
-            placeholder="例如：梳理项目接口"
-            aria-required="true"
-          />
-          <label htmlFor="task-description">任务说明</label>
-          <textarea
-            id="task-description"
-            value={description}
-            onChange={(event) => setDescription(event.target.value)}
-            maxLength={5000}
-            placeholder="可选：补充交付说明"
-          />
-          <label htmlFor="task-priority">优先级</label>
-          <select
-            id="task-priority"
-            value={priority}
-            onChange={(event) => setPriority(event.target.value as TaskPriority)}
-          >
-            <option value="low">低优先级</option>
-            <option value="medium">中优先级</option>
-            <option value="high">高优先级</option>
-          </select>
+          <div className="task-field task-field-wide" role="group" aria-labelledby="task-title-label">
+            <label id="task-title-label" htmlFor="task-title">任务标题</label>
+            <input
+              id="task-title"
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              maxLength={200}
+              placeholder="例如：梳理项目接口"
+              aria-required="true"
+            />
+          </div>
+          <div className="task-field" role="group" aria-labelledby="task-description-label">
+            <label id="task-description-label" htmlFor="task-description">任务说明</label>
+            <textarea
+              id="task-description"
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              maxLength={5000}
+              placeholder="可选：补充交付说明"
+            />
+          </div>
+          <div className="task-field" role="group" aria-labelledby="task-priority-label">
+            <label id="task-priority-label" htmlFor="task-priority">优先级</label>
+            <select
+              id="task-priority"
+              value={priority}
+              onChange={(event) => setPriority(event.target.value as TaskPriority)}
+            >
+              <option value="low">低优先级</option>
+              <option value="medium">中优先级</option>
+              <option value="high">高优先级</option>
+            </select>
+          </div>
           <button type="submit" disabled={isCreating || !projectId}>
             {isCreating ? '创建中…' : '创建任务'}
           </button>

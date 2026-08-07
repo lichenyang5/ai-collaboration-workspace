@@ -68,6 +68,9 @@ describe('TaskBoardPage', () => {
     expect(screen.getByRole('region', { name: '待办' })).toHaveTextContent('梳理项目接口');
     expect(screen.getByRole('region', { name: '进行中' })).toHaveTextContent('实现登录页面');
     expect(screen.getByRole('region', { name: '已完成' })).toHaveTextContent('发布第一版');
+    expect(within(screen.getByRole('group', { name: '任务标题' })).getByRole('textbox')).toBeInTheDocument();
+    expect(within(screen.getByRole('group', { name: '任务说明' })).getByRole('textbox')).toBeInTheDocument();
+    expect(within(screen.getByRole('group', { name: '优先级' })).getByRole('combobox')).toBeInTheDocument();
   });
 
   it('adds a created task to the todo column', async () => {
@@ -92,7 +95,7 @@ describe('TaskBoardPage', () => {
     renderBoard();
 
     await screen.findByRole('heading', { name: '项目任务看板' });
-    await user.type(screen.getByLabelText('任务标题'), '实现任务创建');
+    await user.type(within(screen.getByRole('group', { name: '任务标题' })).getByRole('textbox'), '实现任务创建');
     await user.click(screen.getByRole('button', { name: '创建任务' }));
 
     expect(await within(screen.getByRole('region', { name: '待办' })).findByText('实现任务创建'))
@@ -152,11 +155,12 @@ describe('TaskBoardPage', () => {
     renderBoard();
 
     await screen.findByRole('heading', { name: '项目任务看板' });
-    await user.type(screen.getByLabelText('任务标题'), '保留输入内容');
+    const titleInput = within(screen.getByRole('group', { name: '任务标题' })).getByRole('textbox');
+    await user.type(titleInput, '保留输入内容');
     await user.click(screen.getByRole('button', { name: '创建任务' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('任务创建失败');
-    expect(screen.getByLabelText('任务标题')).toHaveValue('保留输入内容');
+    expect(titleInput).toHaveValue('保留输入内容');
     expect(screen.getByRole('button', { name: '创建任务' })).toBeEnabled();
   });
 });
