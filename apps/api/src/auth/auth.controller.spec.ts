@@ -1,6 +1,8 @@
 import { INestApplication } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Test } from '@nestjs/testing';
+import cookieParser from 'cookie-parser';
 import request from 'supertest';
 import { AppModule } from '../app.module';
 
@@ -16,7 +18,16 @@ describe('Auth registration', () => {
     })
       .overrideProvider(getRepositoryToken(User))
       .useValue({
-        findOne: jest.fn().mockResolvedValue(null),
+        findOne: jest.fn((options: { where?: { id?: string } }) => {
+          if (options.where?.id === 'user-1') {
+            return Promise.resolve({
+              id: 'user-1',
+              email: 'demo@example.com',
+              displayName: 'Demo User',
+            });
+          }
+          return Promise.resolve(null);
+        }),
         create: jest.fn((value: object) => ({ id: 'user-1', ...value })),
         save: jest.fn(async (value: object) => value),
       })
@@ -24,6 +35,7 @@ describe('Auth registration', () => {
 
     app = moduleRef.createNestApplication();
     app.setGlobalPrefix('api');
+    app.use(cookieParser());
     await app.init();
   });
 
@@ -47,5 +59,18 @@ describe('Auth registration', () => {
       displayName: 'Demo User',
     });
     expect(response.body.user).not.toHaveProperty('passwordHash');
+  });
+  it('returns the authenticated user from the access token cookie', async () => {
+    const token = new JwtService({ secret: 'test-secret' }).sign({ sub: 'user-1' });
+    const response = await request(app.getHttpServer())
+      .get('/api/auth/me')
+      .set('Cookie', `access_token=${token}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      id: 'user-1',
+      email: 'demo@example.com',
+      displayName: 'Demo User',
+    });
   });
 });

@@ -59,6 +59,23 @@ export class AuthService {
     return this.createAuthenticationResult(user);
   }
 
+  async getCurrentUser(userId: string): Promise<PublicUser> {
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+      select: { id: true, email: true, displayName: true },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('登录状态已失效');
+    }
+
+    return {
+      id: user.id,
+      email: user.email,
+      displayName: user.displayName,
+    };
+  }
+
   private async createAuthenticationResult(user: User): Promise<AuthenticationResult> {
     const publicUser: PublicUser = {
       id: user.id,

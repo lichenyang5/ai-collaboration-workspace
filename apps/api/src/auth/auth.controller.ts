@@ -1,5 +1,16 @@
-import { Body, Controller, HttpCode, Post, Res, ValidationPipe } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Post,
+  Res,
+  UseGuards,
+  ValidationPipe,
+} from '@nestjs/common';
 import type { Response } from 'express';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { JwtAuthGuard, type CurrentUserPayload } from '../common/guards/jwt-auth.guard';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -27,6 +38,12 @@ export class AuthController {
     const result = await this.authService.login(input);
     this.setAccessTokenCookie(response, result.accessToken);
     return { user: result.user };
+  }
+
+  @Get('me')
+  @UseGuards(JwtAuthGuard)
+  getCurrentUser(@CurrentUser() user: CurrentUserPayload) {
+    return this.authService.getCurrentUser(user.id);
   }
 
   @Post('logout')
