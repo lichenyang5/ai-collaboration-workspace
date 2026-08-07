@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Get,
   Param,
   Post,
   UseGuards,
@@ -27,5 +28,13 @@ export class TasksController {
     @CurrentUser() user: CurrentUserPayload,
   ) {
     return this.tasksService.createTask(input, projectId, user.id);
+  }
+
+  @Get()
+  getTaskBoard(
+    @Param('projectId') projectId: string,
+    @CurrentUser() user: CurrentUserPayload,
+  ) {
+    return this.tasksService.getTaskBoard(projectId, user.id);
   }
 }
