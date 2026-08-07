@@ -177,6 +177,9 @@ export function ProjectListPage() {
                 <p className="team-role">项目</p>
                 <h3>{project.name}</h3>
                 <p>{project.description || '暂未填写项目说明。'}</p>
+                <Link className="card-link" to={`/projects/${project.id}/board`}>
+                  进入 {project.name} 看板
+                </Link>
               </li>
             ))}
           </ul>

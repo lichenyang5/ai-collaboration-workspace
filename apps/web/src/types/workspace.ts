@@ -9,3 +9,21 @@ export interface ProjectSummary {
   name: string;
   description: string;
 }
+
+export type TaskStatus = 'todo' | 'in_progress' | 'done';
+
+export type TaskPriority = 'low' | 'medium' | 'high';
+
+export interface TaskSummary {
+  id: string;
+  title: string;
+  description: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  createdAt: string;
+}
+
+export interface TaskBoardResponse {
+  projectId: string;
+  columns: Record<TaskStatus, TaskSummary[]>;
+}

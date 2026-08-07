@@ -4,6 +4,7 @@ import './App.css';
 import { LoginPage } from './pages/LoginPage';
 import { ProjectListPage } from './pages/ProjectListPage';
 import { RegisterPage } from './pages/RegisterPage';
+import { TaskBoardPage } from './pages/TaskBoardPage';
 import { WorkspacePage } from './pages/WorkspacePage';
 import { apiRequest } from './services/api';
 import type { PublicUser } from './types/auth';
@@ -63,6 +64,10 @@ function AppRoutes() {
       <Route
         path="/teams/:teamId/projects"
         element={currentUser ? <ProjectListPage /> : <Navigate to="/login" replace />}
+      />
+      <Route
+        path="/projects/:projectId/board"
+        element={currentUser ? <TaskBoardPage /> : <Navigate to="/login" replace />}
       />
       <Route path="*" element={<Navigate to="/workspace" replace />} />
     </Routes>
