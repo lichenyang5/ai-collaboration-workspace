@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
 import { WorkspacePage } from './WorkspacePage';
 
 afterEach(() => {
@@ -16,7 +17,7 @@ describe('WorkspacePage', () => {
     );
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<WorkspacePage user={{ id: 'user-1', email: 'demo@example.com', displayName: 'Demo User' }} />);
+    render(<MemoryRouter><WorkspacePage user={{ id: 'user-1', email: 'demo@example.com', displayName: 'Demo User' }} /></MemoryRouter>);
 
     expect(await screen.findByText('产品研发组')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
@@ -41,7 +42,7 @@ describe('WorkspacePage', () => {
     vi.stubGlobal('fetch', fetchMock);
     const user = (await import('@testing-library/user-event')).default.setup();
 
-    render(<WorkspacePage user={{ id: 'user-1', email: 'demo@example.com', displayName: 'Demo User' }} />);
+    render(<MemoryRouter><WorkspacePage user={{ id: 'user-1', email: 'demo@example.com', displayName: 'Demo User' }} /></MemoryRouter>);
     await screen.findByText('还没有团队，下一步可以创建你的第一个团队。');
     await user.type(screen.getByLabelText('团队名称'), '设计协作组');
     await user.click(screen.getByRole('button', { name: '创建团队' }));

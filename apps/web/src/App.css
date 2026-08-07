@@ -314,3 +314,26 @@
     grid-template-columns: 1fr;
   }
 }
+.card-link,
+.back-link {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: 1rem;
+  color: #5266d8;
+  font-size: 0.9rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.card-link:hover,
+.back-link:hover {
+  color: #4052bd;
+  text-decoration: underline;
+}
+
+.card-link:focus-visible,
+.back-link:focus-visible {
+  outline: 3px solid rgb(82 102 216 / 32%);
+  outline-offset: 3px;
+  border-radius: 0.25rem;
+}

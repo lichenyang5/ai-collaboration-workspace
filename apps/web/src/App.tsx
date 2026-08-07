@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import './App.css';
 import { LoginPage } from './pages/LoginPage';
+import { ProjectListPage } from './pages/ProjectListPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { WorkspacePage } from './pages/WorkspacePage';
 import { apiRequest } from './services/api';
@@ -58,6 +59,10 @@ function AppRoutes() {
         element={
           currentUser ? <WorkspacePage user={currentUser} /> : <Navigate to="/login" replace />
         }
+      />
+      <Route
+        path="/teams/:teamId/projects"
+        element={currentUser ? <ProjectListPage /> : <Navigate to="/login" replace />}
       />
       <Route path="*" element={<Navigate to="/workspace" replace />} />
     </Routes>

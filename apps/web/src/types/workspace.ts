@@ -3,3 +3,9 @@ export interface TeamSummary {
   name: string;
   role: 'owner' | 'member';
 }
+
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  description: string;
+}

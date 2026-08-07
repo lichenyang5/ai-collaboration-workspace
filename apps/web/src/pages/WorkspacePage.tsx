@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
+import { Link } from 'react-router-dom';
 import { apiRequest } from '../services/api';
 import type { PublicUser } from '../types/auth';
 import type { TeamSummary } from '../types/workspace';
@@ -116,6 +117,7 @@ export function WorkspacePage({ user }: WorkspacePageProps) {
                 <p className="team-role">{team.role === 'owner' ? '负责人' : '成员'}</p>
                 <h3>{team.name}</h3>
                 <p>项目与任务看板将在这里展开。</p>
+                <Link className="card-link" to={`/teams/${team.id}/projects`}>查看项目</Link>
               </li>
             ))}
           </ul>
