@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  Patch,
   Post,
   UseGuards,
   ValidationPipe,
@@ -13,14 +14,15 @@ import {
   type CurrentUserPayload,
 } from '../common/guards/jwt-auth.guard';
 import { CreateTaskDto } from './dto/create-task.dto';
+import { UpdateTaskStatusDto } from './dto/update-task-status.dto';
 import { TasksService } from './tasks.service';
 
-@Controller('projects/:projectId/tasks')
+@Controller()
 @UseGuards(JwtAuthGuard)
 export class TasksController {
   constructor(private readonly tasksService: TasksService) {}
 
-  @Post()
+  @Post('projects/:projectId/tasks')
   createTask(
     @Param('projectId') projectId: string,
     @Body(new ValidationPipe({ whitelist: true, transform: true }))
@@ -30,11 +32,21 @@ export class TasksController {
     return this.tasksService.createTask(input, projectId, user.id);
   }
 
-  @Get()
+  @Get('projects/:projectId/tasks')
   getTaskBoard(
     @Param('projectId') projectId: string,
     @CurrentUser() user: CurrentUserPayload,
   ) {
     return this.tasksService.getTaskBoard(projectId, user.id);
+  }
+
+  @Patch('tasks/:taskId/status')
+  updateTaskStatus(
+    @Param('taskId') taskId: string,
+    @Body(new ValidationPipe({ whitelist: true, transform: true }))
+    input: UpdateTaskStatusDto,
+    @CurrentUser() user: CurrentUserPayload,
+  ) {
+    return this.tasksService.updateTaskStatus(taskId, input.status, user.id);
   }
 }

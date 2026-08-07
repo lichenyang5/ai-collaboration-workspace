@@ -55,6 +55,36 @@ export class TasksService {
     return { projectId, columns };
   }
 
+  async updateTaskStatus(
+    taskId: string,
+    status: TaskStatus,
+    userId: string,
+  ): Promise<Task> {
+    const taskRepository = this.dataSource.getRepository(Task);
+    const task = await taskRepository.findOne({
+      where: { id: taskId },
+      relations: { project: { team: true } },
+    });
+
+    if (!task) {
+      throw new NotFoundException('任务不存在');
+    }
+
+    const membershipRepository = this.dataSource.getRepository(TeamMember);
+    const membership = await membershipRepository.findOne({
+      where: {
+        team: { id: task.project.team.id },
+        user: { id: userId },
+      },
+    });
+
+    if (!membership) {
+      throw new ForbiddenException('你不是该团队成员');
+    }
+
+    task.status = status;
+    return taskRepository.save(task);
+  }
   private async getAccessibleProject(projectId: string, userId: string): Promise<Project> {
     const projectRepository = this.dataSource.getRepository(Project);
     const project = await projectRepository.findOne({

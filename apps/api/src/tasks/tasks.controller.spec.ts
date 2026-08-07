@@ -19,6 +19,12 @@ describe('Task creation', () => {
     const taskRepository = {
       create: jest.fn((value: object) => ({ id: 'task-1', ...value })),
       save: jest.fn(async (value: object) => value),
+      findOne: jest.fn(async () => ({
+        id: 'task-1',
+        title: '可移动任务',
+        status: TaskStatus.Todo,
+        project: { id: 'project-1', team: { id: 'team-1' } },
+      })),
       find: jest.fn(async () => [
         { id: 'task-todo', title: '待处理任务', status: TaskStatus.Todo },
         { id: 'task-progress', title: '进行中任务', status: TaskStatus.InProgress },
@@ -92,6 +98,19 @@ describe('Task creation', () => {
         in_progress: [{ id: 'task-progress' }],
         done: [{ id: 'task-done' }],
       },
+    });
+  });
+  it('allows a team member to move a task to another board column', async () => {
+    const token = new JwtService({ secret: 'test-secret' }).sign({ sub: 'user-1' });
+    const response = await request(app.getHttpServer())
+      .patch('/api/tasks/task-1/status')
+      .set('Cookie', `access_token=${token}`)
+      .send({ status: TaskStatus.InProgress });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      id: 'task-1',
+      status: TaskStatus.InProgress,
     });
   });
 });
