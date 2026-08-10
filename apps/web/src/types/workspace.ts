@@ -27,6 +27,7 @@ export interface TaskSummary {
   description: string;
   status: TaskStatus;
   priority: TaskPriority;
+  dueDate: string | null;
   createdAt: string;
   assignee: {
     id: string;

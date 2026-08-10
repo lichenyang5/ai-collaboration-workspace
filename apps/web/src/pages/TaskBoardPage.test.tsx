@@ -18,6 +18,7 @@ function createTask(
     description: '',
     status,
     priority: 'medium',
+    dueDate: null,
     createdAt,
     assignee: null,
   };
@@ -57,7 +58,7 @@ describe('TaskBoardPage', () => {
       in_progress: [createTask('task-2', '实现登录页面', 'in_progress')],
       done: [createTask('task-3', '发布第一版', 'done')],
     });
-    const fetchMock = vi.fn(async () =>
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       new Response(JSON.stringify(board), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -135,6 +136,114 @@ describe('TaskBoardPage', () => {
       expect(screen.getByRole('region', { name: '进行中' })).toHaveTextContent('梳理项目接口');
     });
     expect(screen.getByRole('region', { name: '待办' })).not.toHaveTextContent('梳理项目接口');
+  });
+
+  it('updates the task card after editing its details', async () => {
+    const task = createTask('task-1', '梳理项目接口', 'todo');
+    const updatedTask = {
+      ...task,
+      title: '更新接口文档',
+      description: '补充接口交付说明',
+      priority: 'high' as const,
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/tasks/task-1') && init?.method === 'PATCH') {
+        return new Response(JSON.stringify(updatedTask), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      return new Response(JSON.stringify(createBoard({ todo: [task] })), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderBoard();
+
+    await screen.findByText('梳理项目接口');
+    await user.click(screen.getByRole('button', { name: '编辑详情：梳理项目接口' }));
+    const titleInput = screen.getByLabelText('编辑任务标题');
+    await user.clear(titleInput);
+    await user.type(titleInput, '更新接口文档');
+    await user.click(screen.getByRole('button', { name: '保存修改' }));
+
+    expect(await screen.findByText('更新接口文档')).toBeInTheDocument();
+    expect(screen.getByText('补充接口交付说明')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringMatching(/\/api\/tasks\/task-1$/),
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({
+          title: '更新接口文档',
+          description: '',
+          priority: 'medium',
+          assigneeId: null,
+          dueDate: null,
+        }),
+      }),
+    );
+  });
+
+  it('does not send an update request when task detail editing is cancelled', async () => {
+    const task = createTask('task-1', '梳理项目接口', 'todo');
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify(createBoard({ todo: [task] })), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderBoard();
+
+    await screen.findByText('梳理项目接口');
+    await user.click(screen.getByRole('button', { name: '编辑详情：梳理项目接口' }));
+    await user.click(screen.getByRole('button', { name: '取消编辑' }));
+
+    expect(screen.queryByRole('button', { name: '保存修改' })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([input, init]) =>
+      String(input).endsWith('/api/tasks/task-1') &&
+      (init as RequestInit | undefined)?.method === 'PATCH',
+    )).toBe(false);
+  });
+
+  it('keeps task detail form values when saving changes fails', async () => {
+    const task = createTask('task-1', '梳理项目接口', 'todo');
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/tasks/task-1') && init?.method === 'PATCH') {
+        return new Response(JSON.stringify({ message: '任务详情保存失败' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      return new Response(JSON.stringify(createBoard({ todo: [task] })), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderBoard();
+
+    await screen.findByText('梳理项目接口');
+    await user.click(screen.getByRole('button', { name: '编辑详情：梳理项目接口' }));
+    const titleInput = screen.getByLabelText('编辑任务标题');
+    await user.clear(titleInput);
+    await user.type(titleInput, '保留编辑内容');
+    await user.click(screen.getByRole('button', { name: '保存修改' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('任务详情保存失败');
+    expect(titleInput).toHaveValue('保留编辑内容');
+    expect(screen.getByRole('button', { name: '保存修改' })).toBeEnabled();
   });
 
   it('keeps the task form values when creating a task fails', async () => {

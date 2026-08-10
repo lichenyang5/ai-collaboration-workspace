@@ -65,6 +65,10 @@ describe('Task creation', () => {
     const membershipRepository = {
       findOne: jest.fn(
         async (options: { where?: { user?: { id?: string } } }) => {
+          if (options.where?.user?.id === 'user-1') {
+            return { id: 'membership-owner-1' };
+          }
+
           if (options.where?.user?.id === memberId) {
             return {
               id: 'membership-member-1',
@@ -77,7 +81,7 @@ describe('Task creation', () => {
             };
           }
 
-          return { id: 'membership-1' };
+          return null;
         },
       ),
     };
@@ -191,5 +195,59 @@ describe('Task creation', () => {
         email: 'member@example.com',
       },
     });
+  });
+
+  it('updates editable task fields and keeps the selected team member as assignee', async () => {
+    const token = new JwtService({ secret: 'test-secret' }).sign({
+      sub: 'user-1',
+    });
+    const response = await request(app.getHttpServer())
+      .patch('/api/tasks/task-1')
+      .set('Cookie', `access_token=${token}`)
+      .send({
+        title: '更新后的任务详情',
+        description: '补充后的任务说明',
+        priority: TaskPriority.High,
+        dueDate: '2026-08-20',
+        assigneeId: memberId,
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      id: 'task-1',
+      title: '更新后的任务详情',
+      description: '补充后的任务说明',
+      priority: TaskPriority.High,
+      assignee: {
+        id: memberId,
+        displayName: '成员一',
+        email: 'member@example.com',
+      },
+    });
+  });
+
+  it('removes the assignee when assigneeId is null', async () => {
+    const token = new JwtService({ secret: 'test-secret' }).sign({
+      sub: 'user-1',
+    });
+    const response = await request(app.getHttpServer())
+      .patch('/api/tasks/task-1')
+      .set('Cookie', `access_token=${token}`)
+      .send({ assigneeId: null });
+
+    expect(response.status).toBe(200);
+    expect(response.body.assignee).toBeNull();
+  });
+
+  it('rejects assigning a task to a user outside the team', async () => {
+    const token = new JwtService({ secret: 'test-secret' }).sign({
+      sub: 'user-1',
+    });
+    const response = await request(app.getHttpServer())
+      .patch('/api/tasks/task-1')
+      .set('Cookie', `access_token=${token}`)
+      .send({ assigneeId: '22222222-2222-4222-8222-222222222222' });
+
+    expect(response.status).toBe(400);
   });
 });

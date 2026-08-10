@@ -15,6 +15,7 @@ import {
 } from '../common/guards/jwt-auth.guard';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { UpdateTaskStatusDto } from './dto/update-task-status.dto';
+import { UpdateTaskDto } from './dto/update-task.dto';
 import { TasksService } from './tasks.service';
 
 @Controller()
@@ -48,5 +49,15 @@ export class TasksController {
     @CurrentUser() user: CurrentUserPayload,
   ) {
     return this.tasksService.updateTaskStatus(taskId, input.status, user.id);
+  }
+
+  @Patch('tasks/:taskId')
+  updateTask(
+    @Param('taskId') taskId: string,
+    @Body(new ValidationPipe({ whitelist: true, transform: true }))
+    input: UpdateTaskDto,
+    @CurrentUser() user: CurrentUserPayload,
+  ) {
+    return this.tasksService.updateTask(taskId, input, user.id);
   }
 }

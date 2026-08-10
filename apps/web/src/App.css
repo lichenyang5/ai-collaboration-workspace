@@ -423,7 +423,8 @@
   border-radius: 0.25rem;
 }
 
-.task-create-form {
+.task-create-form,
+.task-detail-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.75rem;
@@ -442,7 +443,7 @@
 }
 
 .task-field-wide,
-.task-create-form button {
+.task-create-form > button {
   grid-column: 1 / -1;
 }
 
@@ -454,7 +455,10 @@
 
 .task-create-form input,
 .task-create-form textarea,
-.task-create-form select {
+.task-create-form select,
+.task-detail-form input,
+.task-detail-form textarea,
+.task-detail-form select {
   min-width: 0;
   min-height: 2.7rem;
   padding: 0.65rem 0.8rem;
@@ -464,12 +468,14 @@
   font: inherit;
 }
 
-.task-create-form textarea {
+.task-create-form textarea,
+.task-detail-form textarea {
   min-height: 4rem;
   resize: vertical;
 }
 
 .task-create-form button,
+.task-detail-form button,
 .task-card button {
   min-height: 2.7rem;
   padding: 0 0.9rem;
@@ -482,16 +488,18 @@
   cursor: pointer;
 }
 
-.task-create-form button {
+.task-create-form > button {
   width: min(100%, 13rem);
 }
 
 .task-create-form button:hover:not(:disabled),
+.task-detail-form button:hover:not(:disabled),
 .task-card button:hover:not(:disabled) {
   background: #4052bd;
 }
 
 .task-create-form button:disabled,
+.task-detail-form button:disabled,
 .task-card button:disabled {
   cursor: wait;
   opacity: 0.65;
@@ -501,6 +509,10 @@
 .task-create-form textarea:focus-visible,
 .task-create-form select:focus-visible,
 .task-create-form button:focus-visible,
+.task-detail-form input:focus-visible,
+.task-detail-form textarea:focus-visible,
+.task-detail-form select:focus-visible,
+.task-detail-form button:focus-visible,
 .task-card button:focus-visible {
   outline: 3px solid rgb(82 102 216 / 32%);
   outline-offset: 2px;
@@ -563,6 +575,51 @@
   margin: 0;
 }
 
+.task-detail-panel {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  border: 1px solid #dfe5f0;
+  border-radius: 0.85rem;
+  background: #fbfcff;
+}
+
+.task-detail-panel .section-heading {
+  margin-bottom: 1rem;
+}
+
+.task-detail-panel .section-heading h3 {
+  margin: 0.2rem 0 0;
+  color: #17233c;
+  font-size: 1.05rem;
+}
+
+.task-detail-error {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.task-detail-actions,
+.task-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.task-detail-actions {
+  grid-column: 1 / -1;
+}
+
+.task-secondary-button {
+  border: 1px solid #cbd5e1 !important;
+  background: #fff !important;
+  color: #4052bd !important;
+}
+
+.task-secondary-button:hover:not(:disabled) {
+  border-color: #5266d8 !important;
+  background: #eef1ff !important;
+}
+
 .task-card .task-assignee {
   color: #4052bd;
   font-weight: 700;
@@ -604,6 +661,7 @@
 
 @media (max-width: 760px) {
   .task-create-form,
+  .task-detail-form,
   .task-board {
     grid-template-columns: 1fr;
   }

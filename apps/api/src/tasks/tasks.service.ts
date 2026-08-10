@@ -14,6 +14,7 @@ import {
 import { TeamMember } from '../database/entities/team-member.entity';
 import { User } from '../database/entities/user.entity';
 import { CreateTaskDto } from './dto/create-task.dto';
+import { UpdateTaskDto } from './dto/update-task.dto';
 
 export interface TaskAssigneeSummary {
   id: string;
@@ -125,6 +126,55 @@ export class TasksService {
     }
 
     task.status = status;
+    const savedTask = await taskRepository.save(task);
+    return this.toTaskSummary(savedTask);
+  }
+
+  async updateTask(
+    taskId: string,
+    input: UpdateTaskDto,
+    userId: string,
+  ): Promise<TaskSummary> {
+    const taskRepository = this.dataSource.getRepository(Task);
+    const task = await taskRepository.findOne({
+      where: { id: taskId },
+      relations: { project: { team: true }, assignee: true },
+    });
+
+    if (!task) {
+      throw new NotFoundException('任务不存在');
+    }
+
+    const membershipRepository = this.dataSource.getRepository(TeamMember);
+    const membership = await membershipRepository.findOne({
+      where: {
+        team: { id: task.project.team.id },
+        user: { id: userId },
+      },
+    });
+
+    if (!membership) {
+      throw new ForbiddenException('你不是该团队成员');
+    }
+
+    if (input.title !== undefined) {
+      task.title = input.title.trim();
+    }
+    if (input.description !== undefined) {
+      task.description = input.description.trim();
+    }
+    if (input.priority !== undefined) {
+      task.priority = input.priority;
+    }
+    if (Object.prototype.hasOwnProperty.call(input, 'dueDate')) {
+      task.dueDate = input.dueDate ? new Date(input.dueDate) : null;
+    }
+    if (Object.prototype.hasOwnProperty.call(input, 'assigneeId')) {
+      task.assignee = input.assigneeId
+        ? await this.getTeamMemberUser(input.assigneeId, task.project.team.id)
+        : null;
+    }
+
     const savedTask = await taskRepository.save(task);
     return this.toTaskSummary(savedTask);
   }
