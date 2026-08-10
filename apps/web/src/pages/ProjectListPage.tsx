@@ -1,8 +1,12 @@
-import { useEffect, useReducer } from 'react';
+import { useEffect, useReducer, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { apiRequest } from '../services/api';
-import type { ProjectSummary, TeamMemberSummary, TeamSummary } from '../types/workspace';
+import type {
+  ProjectSummary,
+  TeamMemberSummary,
+  TeamSummary,
+} from '../types/workspace';
 
 interface ProjectPageState {
   projects: ProjectSummary[];
@@ -13,7 +17,6 @@ interface ProjectPageState {
   memberEmail: string;
   isLoading: boolean;
   isCreating: boolean;
-  isInviting: boolean;
   errorMessage: string;
 }
 
@@ -31,7 +34,6 @@ type ProjectPageAction =
   | { type: 'creationStarted' }
   | { type: 'creationFailed'; message: string }
   | { type: 'projectCreated'; project: ProjectSummary }
-  | { type: 'inviteStarted' }
   | { type: 'inviteFailed'; message: string }
   | { type: 'memberInvited'; member: TeamMemberSummary };
 
@@ -44,7 +46,6 @@ const initialProjectPageState: ProjectPageState = {
   memberEmail: '',
   isLoading: true,
   isCreating: false,
-  isInviting: false,
   errorMessage: '',
 };
 
@@ -52,7 +53,10 @@ const initialProjectPageState: ProjectPageState = {
  * 将创建成功后的列表、输入框和按钮状态放入同一个动作中更新，
  * 避免页面出现“项目已创建但按钮仍显示创建中”的中间状态。
  */
-function projectPageReducer(state: ProjectPageState, action: ProjectPageAction): ProjectPageState {
+function projectPageReducer(
+  state: ProjectPageState,
+  action: ProjectPageAction,
+): ProjectPageState {
   switch (action.type) {
     case 'projectsLoaded':
       return {
@@ -82,16 +86,13 @@ function projectPageReducer(state: ProjectPageState, action: ProjectPageAction):
         isCreating: false,
         errorMessage: '',
       };
-    case 'inviteStarted':
-      return { ...state, isInviting: true, errorMessage: '' };
     case 'inviteFailed':
-      return { ...state, isInviting: false, errorMessage: action.message };
+      return { ...state, errorMessage: action.message };
     case 'memberInvited':
       return {
         ...state,
         members: [...state.members, action.member],
         memberEmail: '',
-        isInviting: false,
         errorMessage: '',
       };
   }
@@ -99,7 +100,11 @@ function projectPageReducer(state: ProjectPageState, action: ProjectPageAction):
 
 export function ProjectListPage() {
   const { teamId } = useParams();
-  const [state, dispatch] = useReducer(projectPageReducer, initialProjectPageState);
+  const [state, dispatch] = useReducer(
+    projectPageReducer,
+    initialProjectPageState,
+  );
+  const [isInviting, setIsInviting] = useState(false);
 
   useEffect(() => {
     if (!teamId) {
@@ -131,7 +136,10 @@ export function ProjectListPage() {
         if (isActive) {
           dispatch({
             type: 'loadFailed',
-            message: error instanceof Error ? error.message : '项目加载失败，请稍后重试',
+            message:
+              error instanceof Error
+                ? error.message
+                : '项目加载失败，请稍后重试',
           });
         }
       }
@@ -156,29 +164,36 @@ export function ProjectListPage() {
     }
 
     if (name.length < 2) {
-      dispatch({ type: 'creationFailed', message: '项目名称至少需要 2 个字符' });
+      dispatch({
+        type: 'creationFailed',
+        message: '项目名称至少需要 2 个字符',
+      });
       return;
     }
 
     dispatch({ type: 'creationStarted' });
     try {
-      const createdProject = await apiRequest<ProjectSummary>(`api/teams/${teamId}/projects`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, description: '' }),
-      });
+      const createdProject = await apiRequest<ProjectSummary>(
+        `api/teams/${teamId}/projects`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, description: '' }),
+        },
+      );
       dispatch({ type: 'projectCreated', project: createdProject });
     } catch (error: unknown) {
       dispatch({
         type: 'creationFailed',
-        message: error instanceof Error ? error.message : '创建项目失败，请稍后重试',
+        message:
+          error instanceof Error ? error.message : '创建项目失败，请稍后重试',
       });
     }
   }
 
   async function handleInviteMember(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!teamId || state.isInviting || state.teamRole !== 'owner') {
+    if (!teamId || isInviting || state.teamRole !== 'owner') {
       return;
     }
 
@@ -188,19 +203,25 @@ export function ProjectListPage() {
       return;
     }
 
-    dispatch({ type: 'inviteStarted' });
+    setIsInviting(true);
     try {
-      const member = await apiRequest<TeamMemberSummary>(`api/teams/${teamId}/members`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
-      });
+      const member = await apiRequest<TeamMemberSummary>(
+        `api/teams/${teamId}/members`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email }),
+        },
+      );
       dispatch({ type: 'memberInvited', member });
     } catch (error: unknown) {
       dispatch({
         type: 'inviteFailed',
-        message: error instanceof Error ? error.message : '邀请成员失败，请稍后重试',
+        message:
+          error instanceof Error ? error.message : '邀请成员失败，请稍后重试',
       });
+    } finally {
+      setIsInviting(false);
     }
   }
 
@@ -211,7 +232,9 @@ export function ProjectListPage() {
           <p className="eyebrow">项目工作区</p>
           <h1>{state.teamName}的项目</h1>
         </div>
-        <Link className="back-link" to="/workspace">返回团队列表</Link>
+        <Link className="back-link" to="/workspace">
+          返回团队列表
+        </Link>
       </header>
       <section className="workspace-content" aria-labelledby="projects-title">
         <div className="section-heading">
@@ -225,7 +248,12 @@ export function ProjectListPage() {
           <input
             id="project-name"
             value={state.projectName}
-            onChange={(event) => dispatch({ type: 'projectNameChanged', value: event.target.value })}
+            onChange={(event) =>
+              dispatch({
+                type: 'projectNameChanged',
+                value: event.target.value,
+              })
+            }
             maxLength={160}
             placeholder="例如：良好工作台 MVP"
             aria-required="true"
@@ -242,18 +270,27 @@ export function ProjectListPage() {
             </div>
           </div>
           {state.teamRole === 'owner' ? (
-            <form className="team-form team-member-form" noValidate onSubmit={handleInviteMember}>
+            <form
+              className="team-form team-member-form"
+              noValidate
+              onSubmit={handleInviteMember}
+            >
               <label htmlFor="member-email">成员邮箱</label>
               <input
                 id="member-email"
                 type="email"
                 value={state.memberEmail}
-                onChange={(event) => dispatch({ type: 'memberEmailChanged', value: event.target.value })}
+                onChange={(event) =>
+                  dispatch({
+                    type: 'memberEmailChanged',
+                    value: event.target.value,
+                  })
+                }
                 maxLength={255}
                 placeholder="输入已注册成员的邮箱"
               />
-              <button type="submit" disabled={state.isInviting || !teamId}>
-                {state.isInviting ? '邀请中...' : '邀请成员'}
+              <button type="submit" disabled={isInviting || !teamId}>
+                {isInviting ? '邀请中...' : '邀请成员'}
               </button>
             </form>
           ) : null}
@@ -267,9 +304,17 @@ export function ProjectListPage() {
             ))}
           </ul>
         </section>
-        {state.isLoading ? <p className="workspace-state">正在加载项目…</p> : null}
-        {state.errorMessage ? <p className="form-error" role="alert">{state.errorMessage}</p> : null}
-        {!state.isLoading && !state.errorMessage && state.projects.length === 0 ? (
+        {state.isLoading ? (
+          <p className="workspace-state">正在加载项目…</p>
+        ) : null}
+        {state.errorMessage ? (
+          <p className="form-error" role="alert">
+            {state.errorMessage}
+          </p>
+        ) : null}
+        {!state.isLoading &&
+        !state.errorMessage &&
+        state.projects.length === 0 ? (
           <p className="workspace-state">还没有项目，创建一个项目开始协作。</p>
         ) : null}
         {state.projects.length > 0 ? (
@@ -279,7 +324,10 @@ export function ProjectListPage() {
                 <p className="team-role">项目</p>
                 <h3>{project.name}</h3>
                 <p>{project.description || '暂未填写项目说明。'}</p>
-                <Link className="card-link" to={`/projects/${project.id}/board`}>
+                <Link
+                  className="card-link"
+                  to={`/projects/${project.id}/board`}
+                >
                   进入 {project.name} 看板
                 </Link>
               </li>
