@@ -2,7 +2,13 @@ import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { apiRequest } from '../services/api';
-import type { TaskBoardResponse, TaskPriority, TaskStatus, TaskSummary } from '../types/workspace';
+import type {
+  TaskBoardResponse,
+  TaskPriority,
+  TaskStatus,
+  TaskSummary,
+  TeamMemberSummary,
+} from '../types/workspace';
 
 const columnDefinitions: ReadonlyArray<{ status: TaskStatus; title: string }> = [
   { status: 'todo', title: '待办' },
@@ -40,6 +46,10 @@ export function TaskBoardPage() {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState<TaskPriority>('medium');
+  const [assigneeId, setAssigneeId] = useState('');
+  const [members, setMembers] = useState<TeamMemberSummary[]>([]);
+  const [isLoadingMembers, setIsLoadingMembers] = useState(false);
+  const [membersError, setMembersError] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const [movingTaskId, setMovingTaskId] = useState<string | null>(null);
 
@@ -75,6 +85,47 @@ export function TaskBoardPage() {
     };
   }, [projectId]);
 
+  const teamId = board?.teamId;
+
+  useEffect(() => {
+    if (!teamId) {
+      setMembers([]);
+      setAssigneeId('');
+      return;
+    }
+
+    let isActive = true;
+    setIsLoadingMembers(true);
+    setMembersError('');
+
+    async function loadTeamMembers() {
+      try {
+        const result = await apiRequest<TeamMemberSummary[]>(`api/teams/${teamId}/members`);
+        if (!Array.isArray(result)) {
+          throw new Error('负责人列表响应格式无效');
+        }
+        if (isActive) {
+          setMembers(result);
+        }
+      } catch (error: unknown) {
+        if (isActive) {
+          setMembers([]);
+          setAssigneeId('');
+          setMembersError(error instanceof Error ? error.message : '负责人列表加载失败');
+        }
+      } finally {
+        if (isActive) {
+          setIsLoadingMembers(false);
+        }
+      }
+    }
+
+    void loadTeamMembers();
+    return () => {
+      isActive = false;
+    };
+  }, [teamId]);
+
   async function handleCreateTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!projectId || isCreating) {
@@ -97,6 +148,7 @@ export function TaskBoardPage() {
           title: taskTitle,
           description: description.trim(),
           priority,
+          ...(assigneeId ? { assigneeId } : {}),
         }),
       });
       setBoard((currentBoard) => currentBoard
@@ -111,6 +163,7 @@ export function TaskBoardPage() {
       setTitle('');
       setDescription('');
       setPriority('medium');
+      setAssigneeId('');
     } catch (error: unknown) {
       setErrorMessage(error instanceof Error ? error.message : '任务创建失败，请稍后重试');
     } finally {
@@ -200,10 +253,27 @@ export function TaskBoardPage() {
               <option value="high">高优先级</option>
             </select>
           </div>
+          <div className="task-field" role="group" aria-labelledby="task-assignee-label">
+            <label id="task-assignee-label" htmlFor="task-assignee">负责人</label>
+            <select
+              id="task-assignee"
+              value={assigneeId}
+              disabled={isLoadingMembers || Boolean(membersError)}
+              onChange={(event) => setAssigneeId(event.target.value)}
+            >
+              <option value="">未指派</option>
+              {members.map((member) => (
+                <option key={member.id} value={member.id}>
+                  {member.displayName}
+                </option>
+              ))}
+            </select>
+          </div>
           <button type="submit" disabled={isCreating || !projectId}>
             {isCreating ? '创建中…' : '创建任务'}
           </button>
         </form>
+        {membersError ? <p className="form-error">负责人列表加载失败，仍可创建未指派任务。</p> : null}
         {errorMessage ? <p className="form-error" role="alert">{errorMessage}</p> : null}
         {isLoading ? <p className="workspace-state">正在加载任务看板…</p> : null}
         {board ? (
@@ -228,6 +298,9 @@ export function TaskBoardPage() {
                             </span>
                           </div>
                           {task.description ? <p>{task.description}</p> : null}
+                          <p className="task-assignee">
+                            负责人：{task.assignee?.displayName ?? '未指派'}
+                          </p>
                           <button
                             type="button"
                             disabled={isMoving}

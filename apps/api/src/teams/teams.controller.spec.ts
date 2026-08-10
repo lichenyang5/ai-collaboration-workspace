@@ -23,8 +23,33 @@ describe('Team creation', () => {
       create: jest.fn((value: object) => value),
       save: jest.fn(async (value: object) => value),
       find: jest.fn(async () => [
-        { role: 'owner', team: { id: 'team-1', name: '产品研发组' } },
+        {
+          role: 'owner',
+          team: { id: 'team-1', name: '产品研发组' },
+          user: {
+            id: 'user-1',
+            displayName: '团队负责人',
+            email: 'owner@example.com',
+            passwordHash: 'must-not-be-exposed',
+          },
+        },
       ]),
+      findOne: jest.fn(
+        async (options: { where?: { user?: { id?: string } } }) => {
+          if (options.where?.user?.id === 'user-1') {
+            return { id: 'membership-1', role: 'owner' };
+          }
+
+          return null;
+        },
+      ),
+    };
+    const userRepository = {
+      findOne: jest.fn(async () => ({
+        id: 'member-user-2',
+        displayName: '成员二',
+        email: 'member@example.com',
+      })),
     };
     const manager = {
       getRepository: jest.fn((entity: unknown) =>
@@ -39,9 +64,15 @@ describe('Team creation', () => {
       .useValue({})
       .overrideProvider(getDataSourceToken())
       .useValue({
-        transaction: jest.fn((callback: (value: typeof manager) => unknown) => callback(manager)),
+        transaction: jest.fn((callback: (value: typeof manager) => unknown) =>
+          callback(manager),
+        ),
         getRepository: jest.fn((entity: unknown) =>
-          entity === TeamMember ? memberRepository : teamRepository,
+          entity === TeamMember
+            ? memberRepository
+            : entity === User
+              ? userRepository
+              : teamRepository,
         ),
       })
       .compile();
@@ -57,7 +88,9 @@ describe('Team creation', () => {
   });
 
   it('creates a team and its owner membership for the authenticated user', async () => {
-    const token = new JwtService({ secret: 'test-secret' }).sign({ sub: 'user-1' });
+    const token = new JwtService({ secret: 'test-secret' }).sign({
+      sub: 'user-1',
+    });
     const response = await request(app.getHttpServer())
       .post('/api/teams')
       .set('Cookie', `access_token=${token}`)
@@ -67,7 +100,9 @@ describe('Team creation', () => {
     expect(response.body).toMatchObject({ id: 'team-1', name: '产品研发组' });
   });
   it('returns only teams that belong to the authenticated user', async () => {
-    const token = new JwtService({ secret: 'test-secret' }).sign({ sub: 'user-1' });
+    const token = new JwtService({ secret: 'test-secret' }).sign({
+      sub: 'user-1',
+    });
     const response = await request(app.getHttpServer())
       .get('/api/teams')
       .set('Cookie', `access_token=${token}`);
@@ -76,5 +111,44 @@ describe('Team creation', () => {
     expect(response.body).toEqual([
       { id: 'team-1', name: '产品研发组', role: 'owner' },
     ]);
+  });
+
+  it('allows an owner to invite a registered user and returns only public member fields', async () => {
+    const token = new JwtService({ secret: 'test-secret' }).sign({
+      sub: 'user-1',
+    });
+    const response = await request(app.getHttpServer())
+      .post('/api/teams/team-1/members')
+      .set('Cookie', `access_token=${token}`)
+      .send({ email: 'member@example.com' });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toEqual({
+      id: 'member-user-2',
+      displayName: '成员二',
+      email: 'member@example.com',
+      role: 'member',
+    });
+    expect(response.body).not.toHaveProperty('passwordHash');
+  });
+
+  it("lists a team's members without exposing password hashes", async () => {
+    const token = new JwtService({ secret: 'test-secret' }).sign({
+      sub: 'user-1',
+    });
+    const response = await request(app.getHttpServer())
+      .get('/api/teams/team-1/members')
+      .set('Cookie', `access_token=${token}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([
+      {
+        id: 'user-1',
+        displayName: '团队负责人',
+        email: 'owner@example.com',
+        role: 'owner',
+      },
+    ]);
+    expect(response.body[0]).not.toHaveProperty('passwordHash');
   });
 });

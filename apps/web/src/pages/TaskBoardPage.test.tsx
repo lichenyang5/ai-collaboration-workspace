@@ -19,12 +19,14 @@ function createTask(
     status,
     priority: 'medium',
     createdAt,
+    assignee: null,
   };
 }
 
 function createBoard(tasks: Partial<Record<TaskSummary['status'], TaskSummary[]>> = {}): TaskBoardResponse {
   return {
     projectId: 'project-1',
+    teamId: 'team-1',
     columns: {
       todo: tasks.todo ?? [],
       in_progress: tasks.in_progress ?? [],
@@ -162,5 +164,67 @@ describe('TaskBoardPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('任务创建失败');
     expect(titleInput).toHaveValue('保留输入内容');
     expect(screen.getByRole('button', { name: '创建任务' })).toBeEnabled();
+  });
+
+  it('assigns a created task to a selected team member and shows the assignee', async () => {
+    const assignee = {
+      id: '11111111-1111-4111-8111-111111111111',
+      displayName: '成员一',
+      email: 'member@example.com',
+      role: 'member' as const,
+    };
+    const createdTask = {
+      ...createTask('task-5', '分配负责人任务', 'todo'),
+      assignee: {
+        id: assignee.id,
+        displayName: assignee.displayName,
+        email: assignee.email,
+      },
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/teams/team-1/members')) {
+        return new Response(JSON.stringify([assignee]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/projects/project-1/tasks') && init?.method === 'POST') {
+        return new Response(JSON.stringify(createdTask), {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify(createBoard()), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderBoard();
+
+    await screen.findByRole('option', { name: '成员一' });
+    await user.selectOptions(screen.getByRole('combobox', { name: '负责人' }), assignee.id);
+    await user.type(
+      within(screen.getByRole('group', { name: '任务标题' })).getByRole('textbox'),
+      '分配负责人任务',
+    );
+    await user.click(screen.getByRole('button', { name: '创建任务' }));
+
+    expect(await screen.findByText('负责人：成员一')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringMatching(/\/api\/projects\/project-1\/tasks$/),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          title: '分配负责人任务',
+          description: '',
+          priority: 'medium',
+          assigneeId: assignee.id,
+        }),
+      }),
+    );
   });
 });

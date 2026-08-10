@@ -4,6 +4,13 @@ export interface TeamSummary {
   role: 'owner' | 'member';
 }
 
+export interface TeamMemberSummary {
+  id: string;
+  displayName: string;
+  email: string;
+  role: 'owner' | 'member';
+}
+
 export interface ProjectSummary {
   id: string;
   name: string;
@@ -21,9 +28,15 @@ export interface TaskSummary {
   status: TaskStatus;
   priority: TaskPriority;
   createdAt: string;
+  assignee: {
+    id: string;
+    displayName: string;
+    email: string;
+  } | null;
 }
 
 export interface TaskBoardResponse {
   projectId: string;
+  teamId: string;
   columns: Record<TaskStatus, TaskSummary[]>;
 }

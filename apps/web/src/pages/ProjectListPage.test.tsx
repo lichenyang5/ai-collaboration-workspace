@@ -91,6 +91,13 @@ describe('ProjectListPage', () => {
         });
       }
 
+      if (url.endsWith('/api/teams/team-1/members')) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
       if (url.endsWith('/api/teams')) {
         return new Response(
           JSON.stringify([{ id: 'team-1', name: '冲锋陷阵组', role: 'owner' }]),
@@ -117,5 +124,71 @@ describe('ProjectListPage', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('项目名称至少需要 2 个字符');
     expect(screen.getByRole('button', { name: '创建项目' })).toBeEnabled();
+  });
+
+  it('loads team members and appends an invited member without reloading projects', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith('/api/teams/team-1/members') && init?.method === 'POST') {
+        return new Response(
+          JSON.stringify({
+            id: 'member-2',
+            displayName: '新成员',
+            email: 'member@example.com',
+            role: 'member',
+          }),
+          { status: 201, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      if (url.endsWith('/api/teams/team-1/members')) {
+        return new Response(
+          JSON.stringify([
+            { id: 'owner-1', displayName: '负责人', email: 'owner@example.com', role: 'owner' },
+          ]),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      if (url.endsWith('/api/teams/team-1/projects')) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url.endsWith('/api/teams')) {
+        return new Response(
+          JSON.stringify([{ id: 'team-1', name: '冲锋陷阵组', role: 'owner' }]),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={['/teams/team-1/projects']}>
+        <Routes>
+          <Route path="/teams/:teamId/projects" element={<ProjectListPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('owner@example.com')).toBeInTheDocument();
+    await user.type(screen.getByLabelText('成员邮箱'), 'member@example.com');
+    await user.click(screen.getByRole('button', { name: '邀请成员' }));
+
+    expect(await screen.findByText('新成员')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringMatching(/\/api\/teams\/team-1\/members$/),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ email: 'member@example.com' }),
+      }),
+    );
   });
 });

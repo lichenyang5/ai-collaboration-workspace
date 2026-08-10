@@ -6,7 +6,11 @@ import cookieParser from 'cookie-parser';
 import request from 'supertest';
 import { AppModule } from '../app.module';
 import { Project } from '../database/entities/project.entity';
-import { Task, TaskPriority, TaskStatus } from '../database/entities/task.entity';
+import {
+  Task,
+  TaskPriority,
+  TaskStatus,
+} from '../database/entities/task.entity';
 import { TeamMember } from '../database/entities/team-member.entity';
 import { User } from '../database/entities/user.entity';
 
@@ -14,6 +18,7 @@ process.env.JWT_SECRET = 'test-secret';
 
 describe('Task creation', () => {
   let app: INestApplication;
+  const memberId = '11111111-1111-4111-8111-111111111111';
 
   beforeAll(async () => {
     const taskRepository = {
@@ -27,15 +32,38 @@ describe('Task creation', () => {
       })),
       find: jest.fn(async () => [
         { id: 'task-todo', title: '待处理任务', status: TaskStatus.Todo },
-        { id: 'task-progress', title: '进行中任务', status: TaskStatus.InProgress },
+        {
+          id: 'task-progress',
+          title: '进行中任务',
+          status: TaskStatus.InProgress,
+        },
         { id: 'task-done', title: '已完成任务', status: TaskStatus.Done },
       ]),
     };
     const projectRepository = {
-      findOne: jest.fn(async () => ({ id: 'project-1', team: { id: 'team-1' } })),
+      findOne: jest.fn(async () => ({
+        id: 'project-1',
+        team: { id: 'team-1' },
+      })),
     };
     const membershipRepository = {
-      findOne: jest.fn(async () => ({ id: 'membership-1' })),
+      findOne: jest.fn(
+        async (options: { where?: { user?: { id?: string } } }) => {
+          if (options.where?.user?.id === memberId) {
+            return {
+              id: 'membership-member-1',
+              user: {
+                id: memberId,
+                displayName: '成员一',
+                email: 'member@example.com',
+                passwordHash: 'must-not-be-exposed',
+              },
+            };
+          }
+
+          return { id: 'membership-1' };
+        },
+      ),
     };
     const dataSource = {
       getRepository: jest.fn((entity: unknown) => {
@@ -66,7 +94,9 @@ describe('Task creation', () => {
   });
 
   it('allows a team member to create a task in a project', async () => {
-    const token = new JwtService({ secret: 'test-secret' }).sign({ sub: 'user-1' });
+    const token = new JwtService({ secret: 'test-secret' }).sign({
+      sub: 'user-1',
+    });
     const response = await request(app.getHttpServer())
       .post('/api/projects/project-1/tasks')
       .set('Cookie', `access_token=${token}`)
@@ -85,7 +115,9 @@ describe('Task creation', () => {
     });
   });
   it('returns the project task board grouped by status', async () => {
-    const token = new JwtService({ secret: 'test-secret' }).sign({ sub: 'user-1' });
+    const token = new JwtService({ secret: 'test-secret' }).sign({
+      sub: 'user-1',
+    });
     const response = await request(app.getHttpServer())
       .get('/api/projects/project-1/tasks')
       .set('Cookie', `access_token=${token}`);
@@ -93,6 +125,7 @@ describe('Task creation', () => {
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({
       projectId: 'project-1',
+      teamId: 'team-1',
       columns: {
         todo: [{ id: 'task-todo' }],
         in_progress: [{ id: 'task-progress' }],
@@ -100,8 +133,32 @@ describe('Task creation', () => {
       },
     });
   });
+
+  it('assigns a task only to a team member and returns a safe assignee summary', async () => {
+    const token = new JwtService({ secret: 'test-secret' }).sign({
+      sub: 'user-1',
+    });
+    const response = await request(app.getHttpServer())
+      .post('/api/projects/project-1/tasks')
+      .set('Cookie', `access_token=${token}`)
+      .send({
+        title: '分配给团队成员',
+        priority: TaskPriority.Medium,
+        assigneeId: memberId,
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.assignee).toEqual({
+      id: memberId,
+      displayName: '成员一',
+      email: 'member@example.com',
+    });
+    expect(response.body.assignee).not.toHaveProperty('passwordHash');
+  });
   it('allows a team member to move a task to another board column', async () => {
-    const token = new JwtService({ secret: 'test-secret' }).sign({ sub: 'user-1' });
+    const token = new JwtService({ secret: 'test-secret' }).sign({
+      sub: 'user-1',
+    });
     const response = await request(app.getHttpServer())
       .patch('/api/tasks/task-1/status')
       .set('Cookie', `access_token=${token}`)
