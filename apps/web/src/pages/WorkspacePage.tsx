@@ -7,6 +7,7 @@ import type { TeamSummary } from '../types/workspace';
 
 interface WorkspacePageProps {
   user: PublicUser;
+  onLogout: () => void;
 }
 
 interface CreatedTeam {
@@ -14,11 +15,12 @@ interface CreatedTeam {
   name: string;
 }
 
-export function WorkspacePage({ user }: WorkspacePageProps) {
+export function WorkspacePage({ user, onLogout }: WorkspacePageProps) {
   const [teams, setTeams] = useState<TeamSummary[]>([]);
   const [teamName, setTeamName] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
   useEffect(() => {
@@ -74,6 +76,19 @@ export function WorkspacePage({ user }: WorkspacePageProps) {
     }
   }
 
+  async function handleLogout() {
+    if (isLoggingOut) {
+      return;
+    }
+
+    setIsLoggingOut(true);
+    try {
+      await apiRequest<void>('api/auth/logout', { method: 'POST' });
+    } finally {
+      onLogout();
+    }
+  }
+
   return (
     <main className="workspace-shell">
       <header className="workspace-header">
@@ -81,7 +96,17 @@ export function WorkspacePage({ user }: WorkspacePageProps) {
           <p className="eyebrow">AI Collaboration Workspace</p>
           <h1>你好，{user.displayName}</h1>
         </div>
-        <p className="workspace-email">{user.email}</p>
+        <div className="workspace-user-actions">
+          <p className="workspace-email">{user.email}</p>
+          <button
+            className="logout-button"
+            type="button"
+            disabled={isLoggingOut}
+            onClick={() => void handleLogout()}
+          >
+            {isLoggingOut ? '退出中…' : '退出登录'}
+          </button>
+        </div>
       </header>
       <section className="workspace-content" aria-labelledby="teams-title">
         <div className="section-heading">

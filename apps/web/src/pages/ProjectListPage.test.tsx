@@ -183,6 +183,7 @@ describe('ProjectListPage', () => {
     await user.click(screen.getByRole('button', { name: '邀请成员' }));
 
     expect(await screen.findByText('新成员')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '邀请成员' })).toBeEnabled();
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringMatching(/\/api\/teams\/team-1\/members$/),
       expect.objectContaining({
@@ -190,5 +191,58 @@ describe('ProjectListPage', () => {
         body: JSON.stringify({ email: 'member@example.com' }),
       }),
     );
+  });
+
+  it('reenables the invitation button after the server rejects an invitation', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith('/api/teams/team-1/members') && init?.method === 'POST') {
+        return new Response(JSON.stringify({ message: '该用户已是团队成员' }), {
+          status: 409,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url.endsWith('/api/teams/team-1/members')) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url.endsWith('/api/teams/team-1/projects')) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url.endsWith('/api/teams')) {
+        return new Response(
+          JSON.stringify([{ id: 'team-1', name: '冲锋陷阵组', role: 'owner' }]),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={['/teams/team-1/projects']}>
+        <Routes>
+          <Route path="/teams/:teamId/projects" element={<ProjectListPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole('button', { name: '邀请成员' });
+    await user.type(screen.getByLabelText('成员邮箱'), 'member@example.com');
+    await user.click(screen.getByRole('button', { name: '邀请成员' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('该用户已是团队成员');
+    expect(screen.getByRole('button', { name: '邀请成员' })).toBeEnabled();
   });
 });

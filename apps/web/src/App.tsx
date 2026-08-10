@@ -58,7 +58,11 @@ function AppRoutes() {
       <Route
         path="/workspace"
         element={
-          currentUser ? <WorkspacePage user={currentUser} /> : <Navigate to="/login" replace />
+          currentUser ? (
+            <WorkspacePage user={currentUser} onLogout={() => setCurrentUser(null)} />
+          ) : (
+            <Navigate to="/login" replace />
+          )
         }
       />
       <Route

@@ -190,6 +190,40 @@
   font-size: 0.9rem;
 }
 
+.workspace-user-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.logout-button {
+  min-height: 2.5rem;
+  padding: 0 0.85rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.6rem;
+  background: #fff;
+  color: #24324d;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.logout-button:hover:not(:disabled) {
+  border-color: #5266d8;
+  color: #4052bd;
+}
+
+.logout-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.logout-button:focus-visible {
+  outline: 3px solid rgb(82 102 216 / 32%);
+  outline-offset: 2px;
+}
+
 .workspace-content {
   padding: clamp(1.5rem, 3vw, 2.5rem);
   border: 1px solid #e1e6ef;
@@ -254,6 +288,12 @@
   .workspace-header {
     align-items: start;
     flex-direction: column;
+  }
+
+  .workspace-user-actions {
+    align-items: start;
+    flex-direction: column;
+    gap: 0.5rem;
   }
 }
 .team-form {
