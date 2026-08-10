@@ -337,4 +337,70 @@ describe('TaskBoardPage', () => {
       }),
     );
   });
+
+  it('generates editable AI task drafts and appends confirmed tasks to todo', async () => {
+    const generatedDraft = {
+      title: '梳理接口边界',
+      description: '输出接口清单',
+      priority: 'high' as const,
+    };
+    const confirmedTask = {
+      ...createTask('task-ai-1', generatedDraft.title, 'todo'),
+      description: generatedDraft.description,
+      priority: generatedDraft.priority,
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/projects/project-1/ai/task-drafts') && init?.method === 'POST') {
+        return new Response(JSON.stringify([generatedDraft]), {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/projects/project-1/tasks/batch') && init?.method === 'POST') {
+        return new Response(JSON.stringify([confirmedTask]), {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/teams/team-1/members')) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify(createBoard()), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderBoard();
+
+    await screen.findByRole('heading', { name: '任务协作平台' });
+    await user.type(screen.getByLabelText('项目目标'), '完成团队协作工作区的接口设计与联调');
+    await user.click(screen.getByRole('button', { name: '生成任务草稿' }));
+
+    const draftTitleInput = await screen.findByDisplayValue('梳理接口边界');
+    expect(draftTitleInput).toBeInTheDocument();
+    await user.clear(draftTitleInput);
+    await user.type(draftTitleInput, '完善接口边界');
+    await user.click(screen.getByRole('button', { name: '确认创建任务' }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringMatching(/\/api\/projects\/project-1\/tasks\/batch$/),
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            tasks: [{ ...generatedDraft, title: '完善接口边界' }],
+          }),
+        }),
+      );
+    });
+    expect(await within(screen.getByRole('region', { name: '待办' })).findByText('梳理接口边界'))
+      .toBeInTheDocument();
+  });
 });

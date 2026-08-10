@@ -5,9 +5,17 @@ import { HealthController } from './health/health.controller';
 import { TeamsModule } from './teams/teams.module';
 import { ProjectsModule } from './projects/projects.module';
 import { TasksModule } from './tasks/tasks.module';
+import { AiModule } from './ai/ai.module';
 
 @Module({
-  imports: [DatabaseModule, AuthModule, TeamsModule, ProjectsModule, TasksModule],
+  imports: [
+    DatabaseModule,
+    AuthModule,
+    TeamsModule,
+    ProjectsModule,
+    TasksModule,
+    AiModule,
+  ],
   controllers: [HealthController],
 })
 export class AppModule {}

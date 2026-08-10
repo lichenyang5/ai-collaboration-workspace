@@ -15,6 +15,7 @@ import { TeamMember } from '../database/entities/team-member.entity';
 import { User } from '../database/entities/user.entity';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
+import { CreateTaskBatchDto } from './dto/create-task-batch.dto';
 
 export interface TaskAssigneeSummary {
   id: string;
@@ -66,6 +67,35 @@ export class TasksService {
 
     const savedTask = await taskRepository.save(task);
     return this.toTaskSummary(savedTask);
+  }
+
+  async createTaskBatch(
+    input: CreateTaskBatchDto,
+    projectId: string,
+    userId: string,
+  ): Promise<TaskSummary[]> {
+    const project = await this.getAccessibleProject(projectId, userId);
+
+    return this.dataSource.transaction(async (entityManager) => {
+      const taskRepository = entityManager.getRepository(Task);
+      const tasks = input.tasks.map((item) =>
+        taskRepository.create({
+          title: item.title.trim(),
+          description: item.description?.trim() ?? '',
+          priority: item.priority,
+          status: TaskStatus.Todo,
+          dueDate: null,
+          project,
+          assignee: null,
+        }),
+      );
+      const savedTasks = await taskRepository.save(tasks);
+      return savedTasks.map((task) => this.toTaskSummary(task));
+    });
+  }
+
+  async assertProjectAccess(projectId: string, userId: string): Promise<void> {
+    await this.getAccessibleProject(projectId, userId);
   }
 
   async getTaskBoard(

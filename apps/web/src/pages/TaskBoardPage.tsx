@@ -4,6 +4,7 @@ import { Link, useParams } from 'react-router-dom';
 import { apiRequest } from '../services/api';
 import type {
   TaskBoardResponse,
+  AiTaskDraft,
   TaskPriority,
   TaskStatus,
   TaskSummary,
@@ -60,6 +61,11 @@ export function TaskBoardPage() {
   const [editDueDate, setEditDueDate] = useState('');
   const [taskEditError, setTaskEditError] = useState('');
   const [isSavingTask, setIsSavingTask] = useState(false);
+  const [aiGoal, setAiGoal] = useState('');
+  const [aiDrafts, setAiDrafts] = useState<AiTaskDraft[]>([]);
+  const [aiError, setAiError] = useState('');
+  const [isGeneratingAiDrafts, setIsGeneratingAiDrafts] = useState(false);
+  const [isConfirmingAiDrafts, setIsConfirmingAiDrafts] = useState(false);
 
   useEffect(() => {
     if (!projectId) {
@@ -278,6 +284,85 @@ export function TaskBoardPage() {
     }
   }
 
+  async function handleGenerateAiDrafts(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!projectId || isGeneratingAiDrafts) {
+      return;
+    }
+
+    const goal = aiGoal.trim();
+    if (goal.length < 10) {
+      setAiError('项目目标至少需要 10 个字符');
+      return;
+    }
+
+    setAiError('');
+    setIsGeneratingAiDrafts(true);
+    try {
+      const drafts = await apiRequest<AiTaskDraft[]>(`api/projects/${projectId}/ai/task-drafts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ goal }),
+      });
+      setAiDrafts(drafts);
+    } catch (error: unknown) {
+      setAiError(error instanceof Error ? error.message : 'AI 任务草稿生成失败，请稍后重试');
+    } finally {
+      setIsGeneratingAiDrafts(false);
+    }
+  }
+
+  function updateAiDraft(index: number, update: Partial<AiTaskDraft>) {
+    setAiDrafts((currentDrafts) => currentDrafts.map((draft, draftIndex) =>
+      draftIndex === index ? { ...draft, ...update } : draft,
+    ));
+  }
+
+  function removeAiDraft(index: number) {
+    setAiDrafts((currentDrafts) => currentDrafts.filter((_, draftIndex) => draftIndex !== index));
+  }
+
+  async function handleConfirmAiDrafts() {
+    if (!projectId || isConfirmingAiDrafts || aiDrafts.length === 0) {
+      return;
+    }
+
+    const tasks = aiDrafts.map((draft) => ({
+      title: draft.title.trim(),
+      description: draft.description.trim(),
+      priority: draft.priority,
+    }));
+    if (tasks.some((task) => task.title.length < 2)) {
+      setAiError('每条任务草稿的标题至少需要 2 个字符');
+      return;
+    }
+
+    setAiError('');
+    setIsConfirmingAiDrafts(true);
+    try {
+      const createdTasks = await apiRequest<TaskSummary[]>(`api/projects/${projectId}/tasks/batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tasks }),
+      });
+      setBoard((currentBoard) => currentBoard
+        ? {
+            ...currentBoard,
+            columns: {
+              ...currentBoard.columns,
+              todo: [...currentBoard.columns.todo, ...createdTasks],
+            },
+          }
+        : currentBoard);
+      setAiGoal('');
+      setAiDrafts([]);
+    } catch (error: unknown) {
+      setAiError(error instanceof Error ? error.message : 'AI 任务创建失败，请稍后重试');
+    } finally {
+      setIsConfirmingAiDrafts(false);
+    }
+  }
+
   return (
     <main className="workspace-shell">
       <header className="workspace-header">
@@ -348,6 +433,76 @@ export function TaskBoardPage() {
             {isCreating ? '创建中…' : '创建任务'}
           </button>
         </form>
+        <section className="ai-task-planner" aria-labelledby="ai-task-planner-title">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">AI 协作</p>
+              <h3 id="ai-task-planner-title">AI 拆解项目任务</h3>
+            </div>
+          </div>
+          <p className="ai-task-planner-hint">描述项目目标，AI 将生成可编辑的任务草稿；确认后才会创建到待办列。</p>
+          <form className="ai-task-goal-form" noValidate onSubmit={handleGenerateAiDrafts}>
+            <label htmlFor="ai-task-goal">项目目标</label>
+            <textarea
+              id="ai-task-goal"
+              value={aiGoal}
+              maxLength={2000}
+              placeholder="例如：完成团队协作工作区的接口设计、前端联调与验收"
+              onChange={(event) => setAiGoal(event.target.value)}
+            />
+            <button type="submit" disabled={isGeneratingAiDrafts || isConfirmingAiDrafts || !projectId}>
+              {isGeneratingAiDrafts ? '生成中…' : '生成任务草稿'}
+            </button>
+          </form>
+          {aiError ? <p className="form-error" role="alert">{aiError}</p> : null}
+          {aiDrafts.length > 0 ? (
+            <div className="ai-draft-section">
+              <div className="ai-draft-section-heading">
+                <h4>AI 任务草稿</h4>
+                <span>{aiDrafts.length} 条</span>
+              </div>
+              <div className="ai-draft-list">
+                {aiDrafts.map((draft, index) => (
+                  <article key={index} className="ai-draft-card">
+                    <label htmlFor={`ai-draft-title-${index}`}>草稿 {index + 1} 标题</label>
+                    <input
+                      id={`ai-draft-title-${index}`}
+                      value={draft.title}
+                      maxLength={200}
+                      disabled={isConfirmingAiDrafts}
+                      onChange={(event) => updateAiDraft(index, { title: event.target.value })}
+                    />
+                    <label htmlFor={`ai-draft-description-${index}`}>任务说明</label>
+                    <textarea
+                      id={`ai-draft-description-${index}`}
+                      value={draft.description}
+                      maxLength={5000}
+                      disabled={isConfirmingAiDrafts}
+                      onChange={(event) => updateAiDraft(index, { description: event.target.value })}
+                    />
+                    <label htmlFor={`ai-draft-priority-${index}`}>优先级</label>
+                    <select
+                      id={`ai-draft-priority-${index}`}
+                      value={draft.priority}
+                      disabled={isConfirmingAiDrafts}
+                      onChange={(event) => updateAiDraft(index, { priority: event.target.value as TaskPriority })}
+                    >
+                      <option value="low">低优先级</option>
+                      <option value="medium">中优先级</option>
+                      <option value="high">高优先级</option>
+                    </select>
+                    <button type="button" className="task-secondary-button" disabled={isConfirmingAiDrafts} onClick={() => removeAiDraft(index)}>
+                      移除草稿
+                    </button>
+                  </article>
+                ))}
+              </div>
+              <button type="button" className="ai-confirm-button" disabled={isConfirmingAiDrafts} onClick={() => void handleConfirmAiDrafts()}>
+                {isConfirmingAiDrafts ? '创建中…' : '确认创建任务'}
+              </button>
+            </div>
+          ) : null}
+        </section>
         {membersError ? <p className="form-error">负责人列表加载失败，仍可创建未指派任务。</p> : null}
         {errorMessage ? <p className="form-error" role="alert">{errorMessage}</p> : null}
         {isLoading ? <p className="workspace-state">正在加载任务看板…</p> : null}

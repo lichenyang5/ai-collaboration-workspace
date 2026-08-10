@@ -21,6 +21,12 @@ export type TaskStatus = 'todo' | 'in_progress' | 'done';
 
 export type TaskPriority = 'low' | 'medium' | 'high';
 
+export interface AiTaskDraft {
+  title: string;
+  description: string;
+  priority: TaskPriority;
+}
+
 export interface TaskSummary {
   id: string;
   title: string;

@@ -13,6 +13,7 @@ import {
 } from '../database/entities/task.entity';
 import { TeamMember } from '../database/entities/team-member.entity';
 import { User } from '../database/entities/user.entity';
+import { SiliconFlowTaskPlanningService } from '../ai/siliconflow-task-planning.service';
 
 process.env.JWT_SECRET = 'test-secret';
 
@@ -21,6 +22,15 @@ describe('Task creation', () => {
   const memberId = '11111111-1111-4111-8111-111111111111';
 
   beforeAll(async () => {
+    const taskPlanningService = {
+      generateTaskDrafts: jest.fn(async () => [
+        {
+          title: '梳理接口边界',
+          description: '输出接口清单',
+          priority: TaskPriority.High,
+        },
+      ]),
+    };
     const taskRepository = {
       create: jest.fn((value: object) => ({ id: 'task-1', ...value })),
       save: jest.fn(async (value: object) => value),
@@ -85,22 +95,32 @@ describe('Task creation', () => {
         },
       ),
     };
+    const getRepository = jest.fn((entity: unknown) => {
+      if (entity === Task) {
+        return taskRepository;
+      }
+      if (entity === Project) {
+        return projectRepository;
+      }
+      return membershipRepository;
+    });
     const dataSource = {
-      getRepository: jest.fn((entity: unknown) => {
-        if (entity === Task) {
-          return taskRepository;
-        }
-        if (entity === Project) {
-          return projectRepository;
-        }
-        return membershipRepository;
-      }),
+      getRepository,
+      transaction: jest.fn(
+        async (
+          callback: (entityManager: {
+            getRepository: typeof getRepository;
+          }) => Promise<unknown>,
+        ) => callback({ getRepository }),
+      ),
     };
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(getRepositoryToken(User))
       .useValue({})
       .overrideProvider(getDataSourceToken())
       .useValue(dataSource)
+      .overrideProvider(SiliconFlowTaskPlanningService)
+      .useValue(taskPlanningService)
       .compile();
 
     app = moduleRef.createNestApplication();
@@ -249,5 +269,49 @@ describe('Task creation', () => {
       .send({ assigneeId: '22222222-2222-4222-8222-222222222222' });
 
     expect(response.status).toBe(400);
+  });
+
+  it('returns AI task drafts for a project team member without creating tasks', async () => {
+    const token = new JwtService({ secret: 'test-secret' }).sign({
+      sub: 'user-1',
+    });
+    const response = await request(app.getHttpServer())
+      .post('/api/projects/project-1/ai/task-drafts')
+      .set('Cookie', `access_token=${token}`)
+      .send({ goal: '完成团队协作工作区的接口设计与联调' });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toEqual([
+      {
+        title: '梳理接口边界',
+        description: '输出接口清单',
+        priority: TaskPriority.High,
+      },
+    ]);
+  });
+
+  it('creates confirmed AI drafts as unassigned todo tasks', async () => {
+    const token = new JwtService({ secret: 'test-secret' }).sign({
+      sub: 'user-1',
+    });
+    const response = await request(app.getHttpServer())
+      .post('/api/projects/project-1/tasks/batch')
+      .set('Cookie', `access_token=${token}`)
+      .send({
+        tasks: [
+          {
+            title: '梳理接口边界',
+            description: '输出接口清单',
+            priority: 'high',
+          },
+        ],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body[0]).toMatchObject({
+      title: '梳理接口边界',
+      status: TaskStatus.Todo,
+      assignee: null,
+    });
   });
 });

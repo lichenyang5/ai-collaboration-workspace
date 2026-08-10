@@ -436,6 +436,138 @@
   background: #fbfcff;
 }
 
+.ai-task-planner {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  border: 1px solid #dfe5f0;
+  border-radius: 0.85rem;
+  background: #fbfcff;
+}
+
+.ai-task-planner .section-heading {
+  margin-bottom: 0.4rem;
+}
+
+.ai-task-planner .section-heading h3,
+.ai-draft-section-heading h4 {
+  margin: 0.2rem 0 0;
+  color: #17233c;
+  font-size: 1.05rem;
+}
+
+.ai-task-planner-hint {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.ai-task-goal-form,
+.ai-draft-card {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.ai-task-goal-form {
+  margin-top: 1rem;
+}
+
+.ai-task-goal-form label,
+.ai-draft-card label {
+  color: #24324d;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.ai-task-goal-form textarea,
+.ai-draft-card input,
+.ai-draft-card textarea,
+.ai-draft-card select {
+  min-width: 0;
+  min-height: 2.7rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.6rem;
+  color: #17233c;
+  font: inherit;
+}
+
+.ai-task-goal-form textarea,
+.ai-draft-card textarea {
+  min-height: 4rem;
+  resize: vertical;
+}
+
+.ai-task-goal-form button,
+.ai-confirm-button {
+  width: fit-content;
+  min-height: 2.7rem;
+  padding: 0 0.9rem;
+  border: 0;
+  border-radius: 0.6rem;
+  background: #5266d8;
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.ai-task-goal-form button:hover:not(:disabled),
+.ai-confirm-button:hover:not(:disabled) {
+  background: #4052bd;
+}
+
+.ai-task-goal-form button:disabled,
+.ai-confirm-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.ai-task-goal-form textarea:focus-visible,
+.ai-task-goal-form button:focus-visible,
+.ai-draft-card input:focus-visible,
+.ai-draft-card textarea:focus-visible,
+.ai-draft-card select:focus-visible,
+.ai-draft-card button:focus-visible,
+.ai-confirm-button:focus-visible {
+  outline: 3px solid rgb(82 102 216 / 32%);
+  outline-offset: 2px;
+}
+
+.ai-draft-section {
+  margin-top: 1rem;
+}
+
+.ai-draft-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.ai-draft-section-heading span {
+  color: #64748b;
+  font-size: 0.85rem;
+}
+
+.ai-draft-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.ai-draft-card {
+  padding: 0.85rem;
+  border: 1px solid #dfe5f0;
+  border-radius: 0.7rem;
+  background: #fff;
+}
+
+.ai-confirm-button {
+  margin-top: 1rem;
+}
+
 .task-field {
   display: grid;
   gap: 0.45rem;

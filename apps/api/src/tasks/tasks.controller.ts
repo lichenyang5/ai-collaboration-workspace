@@ -16,6 +16,7 @@ import {
 import { CreateTaskDto } from './dto/create-task.dto';
 import { UpdateTaskStatusDto } from './dto/update-task-status.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
+import { CreateTaskBatchDto } from './dto/create-task-batch.dto';
 import { TasksService } from './tasks.service';
 
 @Controller()
@@ -31,6 +32,16 @@ export class TasksController {
     @CurrentUser() user: CurrentUserPayload,
   ) {
     return this.tasksService.createTask(input, projectId, user.id);
+  }
+
+  @Post('projects/:projectId/tasks/batch')
+  createTaskBatch(
+    @Param('projectId') projectId: string,
+    @Body(new ValidationPipe({ whitelist: true, transform: true }))
+    input: CreateTaskBatchDto,
+    @CurrentUser() user: CurrentUserPayload,
+  ) {
+    return this.tasksService.createTaskBatch(input, projectId, user.id);
   }
 
   @Get('projects/:projectId/tasks')
