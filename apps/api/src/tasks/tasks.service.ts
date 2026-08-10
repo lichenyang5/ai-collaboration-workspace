@@ -70,7 +70,12 @@ export class TasksService {
   async getTaskBoard(
     projectId: string,
     userId: string,
-  ): Promise<{ projectId: string; teamId: string; columns: TaskBoardColumns }> {
+  ): Promise<{
+    projectId: string;
+    projectName: string;
+    teamId: string;
+    columns: TaskBoardColumns;
+  }> {
     const project = await this.getAccessibleProject(projectId, userId);
     const taskRepository = this.dataSource.getRepository(Task);
     const tasks = await taskRepository.find({
@@ -84,7 +89,12 @@ export class TasksService {
       columns[task.status].push(this.toTaskSummary(task));
     }
 
-    return { projectId, teamId: project.team.id, columns };
+    return {
+      projectId,
+      projectName: project.name,
+      teamId: project.team.id,
+      columns,
+    };
   }
 
   async updateTaskStatus(
@@ -95,7 +105,7 @@ export class TasksService {
     const taskRepository = this.dataSource.getRepository(Task);
     const task = await taskRepository.findOne({
       where: { id: taskId },
-      relations: { project: { team: true } },
+      relations: { project: { team: true }, assignee: true },
     });
 
     if (!task) {

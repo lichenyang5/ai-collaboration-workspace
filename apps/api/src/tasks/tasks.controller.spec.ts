@@ -24,12 +24,27 @@ describe('Task creation', () => {
     const taskRepository = {
       create: jest.fn((value: object) => ({ id: 'task-1', ...value })),
       save: jest.fn(async (value: object) => value),
-      findOne: jest.fn(async () => ({
-        id: 'task-1',
-        title: '可移动任务',
-        status: TaskStatus.Todo,
-        project: { id: 'project-1', team: { id: 'team-1' } },
-      })),
+      findOne: jest.fn(
+        async (options: { relations?: { assignee?: boolean } }) => ({
+          id: 'task-1',
+          title: '可移动任务',
+          description: '',
+          priority: TaskPriority.Medium,
+          status: TaskStatus.Todo,
+          dueDate: null,
+          createdAt: new Date('2026-08-10T00:00:00.000Z'),
+          updatedAt: new Date('2026-08-10T00:00:00.000Z'),
+          project: { id: 'project-1', team: { id: 'team-1' } },
+          assignee: options.relations?.assignee
+            ? {
+                id: memberId,
+                displayName: '成员一',
+                email: 'member@example.com',
+                passwordHash: 'must-not-be-exposed',
+              }
+            : null,
+        }),
+      ),
       find: jest.fn(async () => [
         { id: 'task-todo', title: '待处理任务', status: TaskStatus.Todo },
         {
@@ -43,6 +58,7 @@ describe('Task creation', () => {
     const projectRepository = {
       findOne: jest.fn(async () => ({
         id: 'project-1',
+        name: '任务协作平台',
         team: { id: 'team-1' },
       })),
     };
@@ -125,6 +141,7 @@ describe('Task creation', () => {
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({
       projectId: 'project-1',
+      projectName: '任务协作平台',
       teamId: 'team-1',
       columns: {
         todo: [{ id: 'task-todo' }],
@@ -168,6 +185,11 @@ describe('Task creation', () => {
     expect(response.body).toMatchObject({
       id: 'task-1',
       status: TaskStatus.InProgress,
+      assignee: {
+        id: memberId,
+        displayName: '成员一',
+        email: 'member@example.com',
+      },
     });
   });
 });

@@ -37,6 +37,7 @@ export interface TaskSummary {
 
 export interface TaskBoardResponse {
   projectId: string;
+  projectName: string;
   teamId: string;
   columns: Record<TaskStatus, TaskSummary[]>;
 }

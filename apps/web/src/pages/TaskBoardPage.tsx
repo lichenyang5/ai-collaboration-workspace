@@ -208,7 +208,7 @@ export function TaskBoardPage() {
       <header className="workspace-header">
         <div>
           <p className="eyebrow">项目工作区</p>
-          <h1>项目任务看板</h1>
+          <h1>{board?.projectName ?? '项目任务看板'}</h1>
         </div>
         <Link className="back-link" to="/workspace">返回工作区</Link>
       </header>

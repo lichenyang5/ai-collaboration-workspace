@@ -26,6 +26,7 @@ function createTask(
 function createBoard(tasks: Partial<Record<TaskSummary['status'], TaskSummary[]>> = {}): TaskBoardResponse {
   return {
     projectId: 'project-1',
+    projectName: '任务协作平台',
     teamId: 'team-1',
     columns: {
       todo: tasks.todo ?? [],
@@ -66,7 +67,7 @@ describe('TaskBoardPage', () => {
 
     renderBoard();
 
-    expect(await screen.findByRole('heading', { name: '项目任务看板' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '任务协作平台' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: '待办' })).toHaveTextContent('梳理项目接口');
     expect(screen.getByRole('region', { name: '进行中' })).toHaveTextContent('实现登录页面');
     expect(screen.getByRole('region', { name: '已完成' })).toHaveTextContent('发布第一版');
