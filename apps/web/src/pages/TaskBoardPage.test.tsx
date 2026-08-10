@@ -24,7 +24,9 @@ function createTask(
   };
 }
 
-function createBoard(tasks: Partial<Record<TaskSummary['status'], TaskSummary[]>> = {}): TaskBoardResponse {
+function createBoard(
+  tasks: Partial<Record<TaskSummary['status'], TaskSummary[]>> = {},
+): TaskBoardResponse {
   return {
     projectId: 'project-1',
     projectName: '任务协作平台',
@@ -58,84 +60,161 @@ describe('TaskBoardPage', () => {
       in_progress: [createTask('task-2', '实现登录页面', 'in_progress')],
       done: [createTask('task-3', '发布第一版', 'done')],
     });
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-      new Response(JSON.stringify(board), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(JSON.stringify(board), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
     );
     vi.stubGlobal('fetch', fetchMock);
 
     renderBoard();
 
-    expect(await screen.findByRole('heading', { name: '任务协作平台' })).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: '待办' })).toHaveTextContent('梳理项目接口');
-    expect(screen.getByRole('region', { name: '进行中' })).toHaveTextContent('实现登录页面');
-    expect(screen.getByRole('region', { name: '已完成' })).toHaveTextContent('发布第一版');
-    expect(within(screen.getByRole('group', { name: '任务标题' })).getByRole('textbox')).toBeInTheDocument();
-    expect(within(screen.getByRole('group', { name: '任务说明' })).getByRole('textbox')).toBeInTheDocument();
-    expect(within(screen.getByRole('group', { name: '优先级' })).getByRole('combobox')).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { name: '任务协作平台' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('tabpanel', { name: /待办/ })).toHaveTextContent(
+      '梳理项目接口',
+    );
+    expect(screen.queryByText('实现登录页面')).not.toBeInTheDocument();
+    expect(screen.queryByText('发布第一版')).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: '待办 1' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(screen.getByRole('tab', { name: '进行中 1' })).toHaveAttribute(
+      'aria-selected',
+      'false',
+    );
+    expect(
+      within(screen.getByRole('group', { name: '任务标题' })).getByRole(
+        'textbox',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByRole('group', { name: '任务说明' })).getByRole(
+        'textbox',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByRole('group', { name: '优先级' })).getByRole(
+        'combobox',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('switches the visible task list by status without reloading the board', async () => {
+    const board = createBoard({
+      todo: [createTask('task-todo', '待办任务标题', 'todo')],
+      in_progress: [
+        createTask('task-progress', '进行中任务标题', 'in_progress'),
+      ],
+    });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify(board), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderBoard();
+
+    expect(await screen.findByText('待办任务标题')).toBeInTheDocument();
+    expect(screen.queryByText('进行中任务标题')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: '进行中 1' }));
+
+    expect(screen.getByText('进行中任务标题')).toBeInTheDocument();
+    expect(screen.queryByText('待办任务标题')).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('adds a created task to the todo column', async () => {
     const createdTask = createTask('task-4', '实现任务创建', 'todo');
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.endsWith('/api/projects/project-1/tasks') && init?.method === 'POST') {
-        return new Response(JSON.stringify(createdTask), {
-          status: 201,
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (
+          url.endsWith('/api/projects/project-1/tasks') &&
+          init?.method === 'POST'
+        ) {
+          return new Response(JSON.stringify(createdTask), {
+            status: 201,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+
+        return new Response(JSON.stringify(createBoard()), {
+          status: 200,
           headers: { 'Content-Type': 'application/json' },
         });
-      }
-
-      return new Response(JSON.stringify(createBoard()), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    });
+      },
+    );
     vi.stubGlobal('fetch', fetchMock);
     const user = userEvent.setup();
 
     renderBoard();
 
     await screen.findByRole('heading', { name: '项目任务看板' });
-    await user.type(within(screen.getByRole('group', { name: '任务标题' })).getByRole('textbox'), '实现任务创建');
+    await user.type(
+      within(screen.getByRole('group', { name: '任务标题' })).getByRole(
+        'textbox',
+      ),
+      '实现任务创建',
+    );
     await user.click(screen.getByRole('button', { name: '创建任务' }));
 
-    expect(await within(screen.getByRole('region', { name: '待办' })).findByText('实现任务创建'))
-      .toBeInTheDocument();
+    expect(
+      await within(screen.getByRole('tabpanel', { name: /待办/ })).findByText(
+        '实现任务创建',
+      ),
+    ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '创建任务' })).toBeEnabled();
   });
 
   it('moves a task to the requested status after the server accepts the update', async () => {
     const task = createTask('task-1', '梳理项目接口', 'todo');
     const movedTask = { ...task, status: 'in_progress' as const };
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.endsWith('/api/tasks/task-1/status') && init?.method === 'PATCH') {
-        return new Response(JSON.stringify(movedTask), {
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (
+          url.endsWith('/api/tasks/task-1/status') &&
+          init?.method === 'PATCH'
+        ) {
+          return new Response(JSON.stringify(movedTask), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+
+        return new Response(JSON.stringify(createBoard({ todo: [task] })), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         });
-      }
-
-      return new Response(JSON.stringify(createBoard({ todo: [task] })), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    });
+      },
+    );
     vi.stubGlobal('fetch', fetchMock);
     const user = userEvent.setup();
 
     renderBoard();
 
     await screen.findByText('梳理项目接口');
-    await user.click(screen.getByRole('button', { name: '移动“梳理项目接口”到进行中' }));
+    await user.click(
+      screen.getByRole('button', { name: '移动“梳理项目接口”到进行中' }),
+    );
 
+    await user.click(screen.getByRole('tab', { name: /进行中/ }));
     await waitFor(() => {
-      expect(screen.getByRole('region', { name: '进行中' })).toHaveTextContent('梳理项目接口');
+      expect(
+        screen.getByRole('tabpanel', { name: /进行中/ }),
+      ).toHaveTextContent('梳理项目接口');
     });
-    expect(screen.getByRole('region', { name: '待办' })).not.toHaveTextContent('梳理项目接口');
+    expect(screen.queryByText('梳理项目接口')).toBeInTheDocument();
   });
 
   it('updates the task card after editing its details', async () => {
@@ -146,27 +225,31 @@ describe('TaskBoardPage', () => {
       description: '补充接口交付说明',
       priority: 'high' as const,
     };
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.endsWith('/api/tasks/task-1') && init?.method === 'PATCH') {
-        return new Response(JSON.stringify(updatedTask), {
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith('/api/tasks/task-1') && init?.method === 'PATCH') {
+          return new Response(JSON.stringify(updatedTask), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+
+        return new Response(JSON.stringify(createBoard({ todo: [task] })), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         });
-      }
-
-      return new Response(JSON.stringify(createBoard({ todo: [task] })), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    });
+      },
+    );
     vi.stubGlobal('fetch', fetchMock);
     const user = userEvent.setup();
 
     renderBoard();
 
     await screen.findByText('梳理项目接口');
-    await user.click(screen.getByRole('button', { name: '编辑详情：梳理项目接口' }));
+    await user.click(
+      screen.getByRole('button', { name: '编辑详情：梳理项目接口' }),
+    );
     const titleInput = screen.getByLabelText('编辑任务标题');
     await user.clear(titleInput);
     await user.type(titleInput, '更新接口文档');
@@ -191,11 +274,12 @@ describe('TaskBoardPage', () => {
 
   it('does not send an update request when task detail editing is cancelled', async () => {
     const task = createTask('task-1', '梳理项目接口', 'todo');
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-      new Response(JSON.stringify(createBoard({ todo: [task] })), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(JSON.stringify(createBoard({ todo: [task] })), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
     );
     vi.stubGlobal('fetch', fetchMock);
     const user = userEvent.setup();
@@ -203,71 +287,91 @@ describe('TaskBoardPage', () => {
     renderBoard();
 
     await screen.findByText('梳理项目接口');
-    await user.click(screen.getByRole('button', { name: '编辑详情：梳理项目接口' }));
+    await user.click(
+      screen.getByRole('button', { name: '编辑详情：梳理项目接口' }),
+    );
     await user.click(screen.getByRole('button', { name: '取消编辑' }));
 
-    expect(screen.queryByRole('button', { name: '保存修改' })).not.toBeInTheDocument();
-    expect(fetchMock.mock.calls.some(([input, init]) =>
-      String(input).endsWith('/api/tasks/task-1') &&
-      (init as RequestInit | undefined)?.method === 'PATCH',
-    )).toBe(false);
+    expect(
+      screen.queryByRole('button', { name: '保存修改' }),
+    ).not.toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          String(input).endsWith('/api/tasks/task-1') &&
+          (init as RequestInit | undefined)?.method === 'PATCH',
+      ),
+    ).toBe(false);
   });
 
   it('keeps task detail form values when saving changes fails', async () => {
     const task = createTask('task-1', '梳理项目接口', 'todo');
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.endsWith('/api/tasks/task-1') && init?.method === 'PATCH') {
-        return new Response(JSON.stringify({ message: '任务详情保存失败' }), {
-          status: 500,
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith('/api/tasks/task-1') && init?.method === 'PATCH') {
+          return new Response(JSON.stringify({ message: '任务详情保存失败' }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+
+        return new Response(JSON.stringify(createBoard({ todo: [task] })), {
+          status: 200,
           headers: { 'Content-Type': 'application/json' },
         });
-      }
-
-      return new Response(JSON.stringify(createBoard({ todo: [task] })), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    });
+      },
+    );
     vi.stubGlobal('fetch', fetchMock);
     const user = userEvent.setup();
 
     renderBoard();
 
     await screen.findByText('梳理项目接口');
-    await user.click(screen.getByRole('button', { name: '编辑详情：梳理项目接口' }));
+    await user.click(
+      screen.getByRole('button', { name: '编辑详情：梳理项目接口' }),
+    );
     const titleInput = screen.getByLabelText('编辑任务标题');
     await user.clear(titleInput);
     await user.type(titleInput, '保留编辑内容');
     await user.click(screen.getByRole('button', { name: '保存修改' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('任务详情保存失败');
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      '任务详情保存失败',
+    );
     expect(titleInput).toHaveValue('保留编辑内容');
     expect(screen.getByRole('button', { name: '保存修改' })).toBeEnabled();
   });
 
   it('keeps the task form values when creating a task fails', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.endsWith('/api/projects/project-1/tasks') && init?.method === 'POST') {
-        return new Response(JSON.stringify({ message: '任务创建失败' }), {
-          status: 500,
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (
+          url.endsWith('/api/projects/project-1/tasks') &&
+          init?.method === 'POST'
+        ) {
+          return new Response(JSON.stringify({ message: '任务创建失败' }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+
+        return new Response(JSON.stringify(createBoard()), {
+          status: 200,
           headers: { 'Content-Type': 'application/json' },
         });
-      }
-
-      return new Response(JSON.stringify(createBoard()), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    });
+      },
+    );
     vi.stubGlobal('fetch', fetchMock);
     const user = userEvent.setup();
 
     renderBoard();
 
     await screen.findByRole('heading', { name: '项目任务看板' });
-    const titleInput = within(screen.getByRole('group', { name: '任务标题' })).getByRole('textbox');
+    const titleInput = within(
+      screen.getByRole('group', { name: '任务标题' }),
+    ).getByRole('textbox');
     await user.type(titleInput, '保留输入内容');
     await user.click(screen.getByRole('button', { name: '创建任务' }));
 
@@ -291,34 +395,44 @@ describe('TaskBoardPage', () => {
         email: assignee.email,
       },
     };
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.endsWith('/api/teams/team-1/members')) {
-        return new Response(JSON.stringify([assignee]), {
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith('/api/teams/team-1/members')) {
+          return new Response(JSON.stringify([assignee]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (
+          url.endsWith('/api/projects/project-1/tasks') &&
+          init?.method === 'POST'
+        ) {
+          return new Response(JSON.stringify(createdTask), {
+            status: 201,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(JSON.stringify(createBoard()), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         });
-      }
-      if (url.endsWith('/api/projects/project-1/tasks') && init?.method === 'POST') {
-        return new Response(JSON.stringify(createdTask), {
-          status: 201,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      return new Response(JSON.stringify(createBoard()), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    });
+      },
+    );
     vi.stubGlobal('fetch', fetchMock);
     const user = userEvent.setup();
 
     renderBoard();
 
     await screen.findByRole('option', { name: '成员一' });
-    await user.selectOptions(screen.getByRole('combobox', { name: '负责人' }), assignee.id);
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: '负责人' }),
+      assignee.id,
+    );
     await user.type(
-      within(screen.getByRole('group', { name: '任务标题' })).getByRole('textbox'),
+      within(screen.getByRole('group', { name: '任务标题' })).getByRole(
+        'textbox',
+      ),
       '分配负责人任务',
     );
     await user.click(screen.getByRole('button', { name: '创建任务' }));
@@ -349,38 +463,49 @@ describe('TaskBoardPage', () => {
       description: generatedDraft.description,
       priority: generatedDraft.priority,
     };
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.endsWith('/api/projects/project-1/ai/task-drafts') && init?.method === 'POST') {
-        return new Response(JSON.stringify([generatedDraft]), {
-          status: 201,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      if (url.endsWith('/api/projects/project-1/tasks/batch') && init?.method === 'POST') {
-        return new Response(JSON.stringify([confirmedTask]), {
-          status: 201,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      if (url.endsWith('/api/teams/team-1/members')) {
-        return new Response(JSON.stringify([]), {
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (
+          url.endsWith('/api/projects/project-1/ai/task-drafts') &&
+          init?.method === 'POST'
+        ) {
+          return new Response(JSON.stringify([generatedDraft]), {
+            status: 201,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (
+          url.endsWith('/api/projects/project-1/tasks/batch') &&
+          init?.method === 'POST'
+        ) {
+          return new Response(JSON.stringify([confirmedTask]), {
+            status: 201,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (url.endsWith('/api/teams/team-1/members')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(JSON.stringify(createBoard()), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         });
-      }
-      return new Response(JSON.stringify(createBoard()), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    });
+      },
+    );
     vi.stubGlobal('fetch', fetchMock);
     const user = userEvent.setup();
 
     renderBoard();
 
     await screen.findByRole('heading', { name: '任务协作平台' });
-    await user.type(screen.getByLabelText('项目目标'), '完成团队协作工作区的接口设计与联调');
+    await user.type(
+      screen.getByLabelText('项目目标'),
+      '完成团队协作工作区的接口设计与联调',
+    );
     await user.click(screen.getByRole('button', { name: '生成任务草稿' }));
 
     const draftTitleInput = await screen.findByDisplayValue('梳理接口边界');
@@ -400,7 +525,10 @@ describe('TaskBoardPage', () => {
         }),
       );
     });
-    expect(await within(screen.getByRole('region', { name: '待办' })).findByText('梳理接口边界'))
-      .toBeInTheDocument();
+    expect(
+      await within(screen.getByRole('tabpanel', { name: /待办/ })).findByText(
+        '梳理接口边界',
+      ),
+    ).toBeInTheDocument();
   });
 });
