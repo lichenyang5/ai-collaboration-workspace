@@ -1573,4 +1573,169 @@ describe('TaskBoardPage', () => {
       ),
     ).toBe(false);
   });
+
+  it('reloads archived data after a pending active create succeeds and its activity refresh fails', async () => {
+    const activeTask = createTask('task-create-source', '创建前的进行中任务', 'todo');
+    const createdTask = createTask('task-created-switch', '切换时创建的进行中任务', 'todo');
+    const archivedTask = {
+      ...createTask('task-create-archived', '归档视图的任务', 'done'),
+      archivedAt: '2026-08-10T10:00:00.000Z',
+    };
+    const createResponse = createDeferred<Response>();
+    const staleArchivedLoad = createDeferred<Response>();
+    let archivedTaskRequests = 0;
+    let activityRequests = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/api/projects/project-1/task-activities') {
+        activityRequests += 1;
+        return new Response(
+          JSON.stringify(
+            activityRequests === 1 ? [] : { message: '创建后的活动刷新失败' },
+          ),
+          {
+            status: activityRequests === 1 ? 200 : 500,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        );
+      }
+      if (url.pathname === '/api/teams/team-1/members') {
+        return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/projects/project-1/tasks' && init?.method === 'POST') {
+        return createResponse.promise;
+      }
+      if (url.pathname === '/api/projects/project-1/tasks') {
+        if (url.searchParams.get('view') === 'archived') {
+          archivedTaskRequests += 1;
+          if (archivedTaskRequests === 1) {
+            return staleArchivedLoad.promise;
+          }
+          return new Response(JSON.stringify(createBoard({ done: [archivedTask] })), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(JSON.stringify(createBoard({ todo: [activeTask] })), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderBoard();
+    await screen.findByText('创建前的进行中任务');
+    await user.type(screen.getByLabelText('任务标题'), createdTask.title);
+    await user.click(screen.getByRole('button', { name: '创建任务' }));
+    await user.click(screen.getByRole('button', { name: '查看已归档任务' }));
+    await waitFor(() => {
+      expect(archivedTaskRequests).toBe(1);
+    });
+
+    await act(async () => {
+      createResponse.resolve(new Response(JSON.stringify(createdTask), { status: 201, headers: { 'Content-Type': 'application/json' } }));
+      await Promise.resolve();
+      staleArchivedLoad.resolve(new Response(JSON.stringify(createBoard({ done: [archivedTask] })), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(archivedTaskRequests).toBe(2);
+      expect(activityRequests).toBe(2);
+    });
+    await user.click(screen.getByRole('tab', { name: '已完成 1' }));
+    expect(await screen.findByText('归档视图的任务')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '恢复任务：归档视图的任务' })).toBeInTheDocument();
+    expect(screen.queryByText(createdTask.title)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: `恢复任务：${createdTask.title}` }),
+    ).not.toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('创建后的活动刷新失败');
+  });
+
+  it('reloads archived data after a pending active status update succeeds and its activity refresh fails', async () => {
+    const sourceTask = createTask('task-status-source', '切换时更新状态的任务', 'todo');
+    const movedTask = { ...sourceTask, status: 'in_progress' as const };
+    const archivedTask = {
+      ...createTask('task-status-archived', '状态更新后的归档任务', 'done'),
+      archivedAt: '2026-08-10T10:00:00.000Z',
+    };
+    const statusResponse = createDeferred<Response>();
+    const staleArchivedLoad = createDeferred<Response>();
+    let archivedTaskRequests = 0;
+    let activityRequests = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/api/projects/project-1/task-activities') {
+        activityRequests += 1;
+        return new Response(
+          JSON.stringify(
+            activityRequests === 1 ? [] : { message: '状态更新后的活动刷新失败' },
+          ),
+          {
+            status: activityRequests === 1 ? 200 : 500,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        );
+      }
+      if (url.pathname === '/api/teams/team-1/members') {
+        return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/tasks/task-status-source/status' && init?.method === 'PATCH') {
+        return statusResponse.promise;
+      }
+      if (url.pathname === '/api/projects/project-1/tasks') {
+        if (url.searchParams.get('view') === 'archived') {
+          archivedTaskRequests += 1;
+          if (archivedTaskRequests === 1) {
+            return staleArchivedLoad.promise;
+          }
+          return new Response(JSON.stringify(createBoard({ done: [archivedTask] })), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(JSON.stringify(createBoard({ todo: [sourceTask] })), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderBoard();
+    await screen.findByText(sourceTask.title);
+    await user.click(
+      screen.getByRole('button', { name: `移动“${sourceTask.title}”到进行中` }),
+    );
+    await user.click(screen.getByRole('button', { name: '查看已归档任务' }));
+    await waitFor(() => {
+      expect(archivedTaskRequests).toBe(1);
+    });
+
+    await act(async () => {
+      statusResponse.resolve(new Response(JSON.stringify(movedTask), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      await Promise.resolve();
+      staleArchivedLoad.resolve(new Response(JSON.stringify(createBoard({ done: [archivedTask] })), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(archivedTaskRequests).toBe(2);
+      expect(activityRequests).toBe(2);
+    });
+    await user.click(screen.getByRole('tab', { name: '已完成 1' }));
+    expect(await screen.findByText('状态更新后的归档任务')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '恢复任务：状态更新后的归档任务' })).toBeInTheDocument();
+    expect(screen.queryByText(sourceTask.title)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: `恢复任务：${sourceTask.title}` }),
+    ).not.toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('状态更新后的活动刷新失败');
+  });
 });

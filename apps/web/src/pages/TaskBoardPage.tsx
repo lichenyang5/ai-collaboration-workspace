@@ -363,6 +363,19 @@ export function TaskBoardPage() {
     boardMutationGeneration.current += 1;
   }
 
+  function reconcileSuccessfulBoardMutation(
+    mutationView: TaskBoardView,
+    updateCurrentView: () => void,
+  ) {
+    invalidateBoardLoadsBeforeMutation();
+    if (currentBoardView.current === mutationView) {
+      updateCurrentView();
+      return;
+    }
+
+    setBoardRequestGeneration((generation) => generation + 1);
+  }
+
   async function handleCreateTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!projectId || isCreating) {
@@ -375,6 +388,7 @@ export function TaskBoardPage() {
       return;
     }
 
+    const mutationView = currentBoardView.current;
     setErrorMessage('');
     setIsCreating(true);
     try {
@@ -392,29 +406,30 @@ export function TaskBoardPage() {
           }),
         },
       );
-      setBoard((currentBoard) =>
-        currentBoard
-          ? {
-              ...currentBoard,
-              columns: {
-                ...currentBoard.columns,
-                todo: [...currentBoard.columns.todo, createdTask],
-              },
-            }
-          : currentBoard,
-      );
-      setLastSuccessfulBoard((currentBoard) =>
-        currentBoard
-          ? {
-              ...currentBoard,
-              columns: {
-                ...currentBoard.columns,
-                todo: [...currentBoard.columns.todo, createdTask],
-              },
-            }
-          : currentBoard,
-      );
-      invalidateBoardLoadsBeforeMutation();
+      reconcileSuccessfulBoardMutation(mutationView, () => {
+        setBoard((currentBoard) =>
+          currentBoard
+            ? {
+                ...currentBoard,
+                columns: {
+                  ...currentBoard.columns,
+                  todo: [...currentBoard.columns.todo, createdTask],
+                },
+              }
+            : currentBoard,
+        );
+        setLastSuccessfulBoard((currentBoard) =>
+          currentBoard
+            ? {
+                ...currentBoard,
+                columns: {
+                  ...currentBoard.columns,
+                  todo: [...currentBoard.columns.todo, createdTask],
+                },
+              }
+            : currentBoard,
+        );
+      });
       setTitle('');
       setDescription('');
       setPriority('medium');
@@ -437,6 +452,7 @@ export function TaskBoardPage() {
 
     const fromStatus = task.status;
     const toStatus = getNextStatus(fromStatus);
+    const mutationView = currentBoardView.current;
     setErrorMessage('');
     setMovingTaskId(task.id);
     try {
@@ -448,8 +464,9 @@ export function TaskBoardPage() {
           body: JSON.stringify({ status: toStatus }),
         },
       );
-      moveTaskInBoards(task.id, fromStatus, toStatus, updatedTask);
-      invalidateBoardLoadsBeforeMutation();
+      reconcileSuccessfulBoardMutation(mutationView, () =>
+        moveTaskInBoards(task.id, fromStatus, toStatus, updatedTask),
+      );
       refreshActivities();
     } catch (error: unknown) {
       setErrorMessage(
@@ -561,12 +578,9 @@ export function TaskBoardPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ archived }),
       });
-      invalidateBoardLoadsBeforeMutation();
-      if (currentBoardView.current === mutationView) {
-        removeTaskFromBoards(task.id);
-      } else {
-        setBoardRequestGeneration((generation) => generation + 1);
-      }
+      reconcileSuccessfulBoardMutation(mutationView, () =>
+        removeTaskFromBoards(task.id),
+      );
       refreshActivities();
     } catch (error: unknown) {
       setErrorMessage(
@@ -604,6 +618,7 @@ export function TaskBoardPage() {
       return;
     }
 
+    const mutationView = currentBoardView.current;
     setTaskEditError('');
     setIsSavingTask(true);
     try {
@@ -621,8 +636,7 @@ export function TaskBoardPage() {
           }),
         },
       );
-      replaceTask(updatedTask);
-      invalidateBoardLoadsBeforeMutation();
+      reconcileSuccessfulBoardMutation(mutationView, () => replaceTask(updatedTask));
       refreshActivities();
       setEditingTask(null);
     } catch (error: unknown) {
@@ -697,6 +711,7 @@ export function TaskBoardPage() {
       return;
     }
 
+    const mutationView = currentBoardView.current;
     setAiError('');
     setIsConfirmingAiDrafts(true);
     try {
@@ -718,9 +733,10 @@ export function TaskBoardPage() {
               },
             }
           : currentBoard;
-      setBoard(appendTasks);
-      setLastSuccessfulBoard(appendTasks);
-      invalidateBoardLoadsBeforeMutation();
+      reconcileSuccessfulBoardMutation(mutationView, () => {
+        setBoard(appendTasks);
+        setLastSuccessfulBoard(appendTasks);
+      });
       setAiGoal('');
       setAiDrafts([]);
       refreshActivities();
