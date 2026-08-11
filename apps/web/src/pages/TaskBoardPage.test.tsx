@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -19,6 +19,7 @@ function createTask(
     status,
     priority: 'medium',
     dueDate: null,
+    archivedAt: null,
     createdAt,
     assignee: null,
   };
@@ -39,9 +40,9 @@ function createBoard(
   };
 }
 
-function renderBoard() {
+function renderBoard(entry = '/projects/project-1/board') {
   return render(
-    <MemoryRouter initialEntries={['/projects/project-1/board']}>
+    <MemoryRouter initialEntries={[entry]}>
       <Routes>
         <Route path="/projects/:projectId/board" element={<TaskBoardPage />} />
       </Routes>
@@ -51,6 +52,7 @@ function renderBoard() {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe('TaskBoardPage', () => {
@@ -87,21 +89,9 @@ describe('TaskBoardPage', () => {
       'aria-selected',
       'false',
     );
-    expect(
-      within(screen.getByRole('group', { name: '任务标题' })).getByRole(
-        'textbox',
-      ),
-    ).toBeInTheDocument();
-    expect(
-      within(screen.getByRole('group', { name: '任务说明' })).getByRole(
-        'textbox',
-      ),
-    ).toBeInTheDocument();
-    expect(
-      within(screen.getByRole('group', { name: '优先级' })).getByRole(
-        'combobox',
-      ),
-    ).toBeInTheDocument();
+    expect(screen.getByLabelText('任务标题')).toBeInTheDocument();
+    expect(screen.getByLabelText('任务说明')).toBeInTheDocument();
+    expect(screen.getByLabelText('优先级')).toBeInTheDocument();
   });
 
   it('switches the visible task list by status without reloading the board', async () => {
@@ -133,6 +123,144 @@ describe('TaskBoardPage', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('restores supported filters from the URL and sends them with the board request', async () => {
+    const board = createBoard({
+      todo: [createTask('task-filtered', '接口筛选结果', 'todo')],
+    });
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/api/teams/team-1/members')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+
+        return new Response(JSON.stringify(board), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderBoard(
+      '/projects/project-1/board?q=接口&priority=high&due=overdue',
+    );
+
+    await screen.findByText('接口筛选结果');
+
+    expect(screen.getByLabelText('关键词')).toHaveValue('接口');
+    expect(screen.getByLabelText('筛选优先级')).toHaveValue('high');
+    expect(screen.getByLabelText('截止状态')).toHaveValue('overdue');
+
+    const boardRequest = fetchMock.mock.calls.find(([input]) =>
+      String(input).includes('/api/projects/project-1/tasks'),
+    );
+    expect(boardRequest).toBeDefined();
+    const boardUrl = new URL(String(boardRequest?.[0]));
+    expect(boardUrl.searchParams.get('q')).toBe('接口');
+    expect(boardUrl.searchParams.get('priority')).toBe('high');
+    expect(boardUrl.searchParams.get('due')).toBe('overdue');
+  });
+
+  it('debounces a keyword filter for 250 ms before issuing one new board request', async () => {
+    const board = createBoard({
+      todo: [createTask('task-debounced', '初始任务', 'todo')],
+    });
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/api/teams/team-1/members')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+
+        return new Response(JSON.stringify(board), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderBoard();
+    await screen.findByText('初始任务');
+    vi.useFakeTimers();
+    fireEvent.change(screen.getByLabelText('关键词'), {
+      target: { value: '新的关键词' },
+    });
+
+    const boardRequests = () =>
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).includes('/api/projects/project-1/tasks'),
+      );
+    expect(boardRequests()).toHaveLength(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(249);
+    });
+    expect(boardRequests()).toHaveLength(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(boardRequests()).toHaveLength(2);
+    expect(
+      new URL(String(boardRequests()[1]?.[0])).searchParams.get('q'),
+    ).toBe('新的关键词');
+  });
+
+  it('keeps the last successful board visible when filtering fails and retries it on request', async () => {
+    const board = createBoard({
+      todo: [createTask('task-stable', '保留的任务卡片', 'todo')],
+    });
+    let boardRequestCount = 0;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/api/teams/team-1/members')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+
+        boardRequestCount += 1;
+        if (boardRequestCount === 2) {
+          return new Response(JSON.stringify({ message: '筛选加载失败' }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+
+        return new Response(JSON.stringify(board), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderBoard();
+    await screen.findByText('保留的任务卡片');
+    await user.selectOptions(screen.getByLabelText('筛选优先级'), 'high');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('筛选加载失败');
+    expect(screen.getByText('保留的任务卡片')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '重新加载' }));
+
+    await waitFor(() => {
+      expect(boardRequestCount).toBe(3);
+    });
+    expect(screen.getByText('保留的任务卡片')).toBeInTheDocument();
+  });
+
   it('adds a created task to the todo column', async () => {
     const createdTask = createTask('task-4', '实现任务创建', 'todo');
     const fetchMock = vi.fn(
@@ -160,12 +288,7 @@ describe('TaskBoardPage', () => {
     renderBoard();
 
     await screen.findByRole('heading', { name: '项目任务看板' });
-    await user.type(
-      within(screen.getByRole('group', { name: '任务标题' })).getByRole(
-        'textbox',
-      ),
-      '实现任务创建',
-    );
+    await user.type(screen.getByLabelText('任务标题'), '实现任务创建');
     await user.click(screen.getByRole('button', { name: '创建任务' }));
 
     expect(
@@ -174,6 +297,65 @@ describe('TaskBoardPage', () => {
       ),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '创建任务' })).toBeEnabled();
+  });
+
+  it('sends a creation due date and clears it after the task is created', async () => {
+    const createdTask = {
+      ...createTask('task-due-date', '带截止日期的任务', 'todo'),
+      dueDate: '2026-08-14T00:00:00.000Z',
+    };
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (
+          url.endsWith('/api/projects/project-1/tasks') &&
+          init?.method === 'POST'
+        ) {
+          return new Response(JSON.stringify(createdTask), {
+            status: 201,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+
+        if (url.endsWith('/api/teams/team-1/members')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+
+        return new Response(JSON.stringify(createBoard()), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderBoard();
+    await screen.findByRole('heading', { name: '项目任务看板' });
+    await user.type(screen.getByLabelText('任务标题'), '带截止日期的任务');
+    const dueDateInput = screen.getByLabelText('截止日期');
+    await user.type(dueDateInput, '2026-08-14');
+    await user.click(screen.getByRole('button', { name: '创建任务' }));
+
+    expect(
+      await screen.findByText('带截止日期的任务'),
+    ).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringMatching(/\/api\/projects\/project-1\/tasks$/),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          title: '带截止日期的任务',
+          description: '',
+          priority: 'medium',
+          dueDate: '2026-08-14',
+        }),
+      }),
+    );
+    expect(dueDateInput).toHaveValue('');
   });
 
   it('moves a task to the requested status after the server accepts the update', async () => {
@@ -369,14 +551,15 @@ describe('TaskBoardPage', () => {
     renderBoard();
 
     await screen.findByRole('heading', { name: '项目任务看板' });
-    const titleInput = within(
-      screen.getByRole('group', { name: '任务标题' }),
-    ).getByRole('textbox');
+    const titleInput = screen.getByLabelText('任务标题');
     await user.type(titleInput, '保留输入内容');
+    const dueDateInput = screen.getByLabelText('截止日期');
+    await user.type(dueDateInput, '2026-08-14');
     await user.click(screen.getByRole('button', { name: '创建任务' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('任务创建失败');
     expect(titleInput).toHaveValue('保留输入内容');
+    expect(dueDateInput).toHaveValue('2026-08-14');
     expect(screen.getByRole('button', { name: '创建任务' })).toBeEnabled();
   });
 
@@ -424,17 +607,12 @@ describe('TaskBoardPage', () => {
 
     renderBoard();
 
-    await screen.findByRole('option', { name: '成员一' });
-    await user.selectOptions(
-      screen.getByRole('combobox', { name: '负责人' }),
-      assignee.id,
-    );
-    await user.type(
-      within(screen.getByRole('group', { name: '任务标题' })).getByRole(
-        'textbox',
-      ),
-      '分配负责人任务',
-    );
+    const assigneeSelect = screen.getByRole('combobox', { name: '负责人' });
+    expect(
+      await within(assigneeSelect).findByRole('option', { name: '成员一' }),
+    ).toBeInTheDocument();
+    await user.selectOptions(assigneeSelect, assignee.id);
+    await user.type(screen.getByLabelText('任务标题'), '分配负责人任务');
     await user.click(screen.getByRole('button', { name: '创建任务' }));
 
     expect(await screen.findByText('负责人：成员一')).toBeInTheDocument();

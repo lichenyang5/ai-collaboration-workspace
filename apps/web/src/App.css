@@ -436,6 +436,75 @@
   background: #fbfcff;
 }
 
+.task-filters {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1.5fr) repeat(3, minmax(9rem, 1fr));
+  gap: 0.75rem;
+  align-items: end;
+  margin-top: 1.5rem;
+  padding: 1rem;
+  border: 1px solid #e1e6ef;
+  border-radius: 0.85rem;
+  background: #fbfcff;
+}
+
+.task-filter-field {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.task-filter-field label {
+  color: #24324d;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.task-filter-field input,
+.task-filter-field select {
+  min-width: 0;
+  min-height: 2.7rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.6rem;
+  color: #17233c;
+  font: inherit;
+}
+
+.task-filter-field input:focus-visible,
+.task-filter-field select:focus-visible {
+  outline: 3px solid rgb(82 102 216 / 32%);
+  outline-offset: 2px;
+}
+
+.task-board-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid #fecdd3;
+  border-radius: 0.7rem;
+  background: #fff7f7;
+}
+
+.task-board-error p {
+  margin: 0;
+  color: #c2414d;
+  font-size: 0.9rem;
+}
+
+.task-board-error .task-secondary-button {
+  flex: none;
+  min-height: 2.5rem;
+  padding: 0 0.85rem;
+  border-radius: 0.6rem;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
 .ai-task-planner {
   margin-top: 1.5rem;
   padding: 1rem;
@@ -864,7 +933,38 @@
   color: #c2414d;
 }
 
+.task-due-label {
+  width: fit-content;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.task-due-label-today {
+  background: #edf0ff;
+  color: #4052bd;
+}
+
+.task-due-label-soon {
+  background: #fff6db;
+  color: #9a6700;
+}
+
+.task-due-label-overdue {
+  background: #fff0f1;
+  color: #c2414d;
+}
+
 @media (max-width: 760px) {
+  .task-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .task-filter-keyword {
+    grid-column: 1 / -1;
+  }
+
   .task-create-form,
   .task-detail-form {
     grid-template-columns: 1fr;
@@ -896,5 +996,20 @@
   .task-card-actions {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .task-board-error {
+    align-items: start;
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 480px) {
+  .task-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .task-filter-keyword {
+    grid-column: auto;
   }
 }

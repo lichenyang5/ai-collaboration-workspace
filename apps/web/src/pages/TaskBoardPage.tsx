@@ -1,10 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { AiTaskPlanner } from '../components/tasks/AiTaskPlanner';
+import { TaskCard } from '../components/tasks/TaskCard';
+import { TaskEditor } from '../components/tasks/TaskEditor';
+import type { UpdateTaskInput } from '../components/tasks/TaskEditor';
+import { TaskFilters } from '../components/tasks/TaskFilters';
+import { getTaskDueLabel } from '../components/tasks/task-due-state';
 import { apiRequest } from '../services/api';
 import type {
-  TaskBoardResponse,
   AiTaskDraft,
+  TaskBoardResponse,
+  TaskBoardView,
+  TaskDueFilter,
+  TaskFilterValues,
   TaskPriority,
   TaskStatus,
   TaskSummary,
@@ -18,11 +27,16 @@ const columnDefinitions: ReadonlyArray<{ status: TaskStatus; title: string }> =
     { status: 'done', title: '已完成' },
   ];
 
-const priorityLabels: Record<TaskPriority, string> = {
-  low: '低优先级',
-  medium: '中优先级',
-  high: '高优先级',
-};
+const priorityValues = new Set<TaskPriority>(['low', 'medium', 'high']);
+const dueValues = new Set<TaskDueFilter>([
+  'unset',
+  'normal',
+  'due_soon',
+  'overdue',
+]);
+const viewValues = new Set<TaskBoardView>(['active', 'archived']);
+const uuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function getNextStatus(status: TaskStatus): TaskStatus {
   if (status === 'todo') {
@@ -36,22 +50,72 @@ function getNextStatus(status: TaskStatus): TaskStatus {
   return 'todo';
 }
 
-function getStatusLabel(status: TaskStatus): string {
-  return (
-    columnDefinitions.find((column) => column.status === status)?.title ??
-    status
-  );
+function normalizeFilterValues(searchParams: URLSearchParams): TaskFilterValues {
+  const priority = searchParams.get('priority') ?? '';
+  const due = searchParams.get('due') ?? '';
+  const view = searchParams.get('view') ?? 'active';
+  const assigneeId = searchParams.get('assigneeId')?.trim() ?? '';
+
+  return {
+    q: (searchParams.get('q') ?? '').trim().slice(0, 200),
+    assigneeId:
+      assigneeId === 'unassigned' || uuidPattern.test(assigneeId)
+        ? assigneeId
+        : '',
+    priority: priorityValues.has(priority as TaskPriority)
+      ? (priority as TaskPriority)
+      : '',
+    due: dueValues.has(due as TaskDueFilter) ? (due as TaskDueFilter) : '',
+    view: viewValues.has(view as TaskBoardView)
+      ? (view as TaskBoardView)
+      : 'active',
+  };
+}
+
+function toSearchParams(values: TaskFilterValues): URLSearchParams {
+  const next = new URLSearchParams();
+  if (values.q) {
+    next.set('q', values.q);
+  }
+  if (values.assigneeId) {
+    next.set('assigneeId', values.assigneeId);
+  }
+  if (values.priority) {
+    next.set('priority', values.priority);
+  }
+  if (values.due) {
+    next.set('due', values.due);
+  }
+  if (values.view !== 'active') {
+    next.set('view', values.view);
+  }
+  return next;
+}
+
+function toBoardQuery(values: TaskFilterValues): string {
+  return toSearchParams(values).toString();
 }
 
 export function TaskBoardPage() {
   const { projectId } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const filters = useMemo(
+    () => normalizeFilterValues(searchParams),
+    [searchParams],
+  );
+  const [debouncedQuery, setDebouncedQuery] = useState(() => filters.q);
   const [board, setBoard] = useState<TaskBoardResponse | null>(null);
+  const [lastSuccessfulBoard, setLastSuccessfulBoard] =
+    useState<TaskBoardResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [boardError, setBoardError] = useState('');
+  const [boardRequestGeneration, setBoardRequestGeneration] = useState(0);
   const [errorMessage, setErrorMessage] = useState('');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState<TaskPriority>('medium');
   const [assigneeId, setAssigneeId] = useState('');
+  const [dueDate, setDueDate] = useState('');
   const [members, setMembers] = useState<TeamMemberSummary[]>([]);
   const [isLoadingMembers, setIsLoadingMembers] = useState(false);
   const [membersError, setMembersError] = useState('');
@@ -59,11 +123,13 @@ export function TaskBoardPage() {
   const [movingTaskId, setMovingTaskId] = useState<string | null>(null);
   const [selectedStatus, setSelectedStatus] = useState<TaskStatus>('todo');
   const [editingTask, setEditingTask] = useState<TaskSummary | null>(null);
-  const [editTitle, setEditTitle] = useState('');
-  const [editDescription, setEditDescription] = useState('');
-  const [editPriority, setEditPriority] = useState<TaskPriority>('medium');
-  const [editAssigneeId, setEditAssigneeId] = useState('');
-  const [editDueDate, setEditDueDate] = useState('');
+  const [editInput, setEditInput] = useState<UpdateTaskInput>({
+    title: '',
+    description: '',
+    priority: 'medium',
+    assigneeId: null,
+    dueDate: null,
+  });
   const [taskEditError, setTaskEditError] = useState('');
   const [isSavingTask, setIsSavingTask] = useState(false);
   const [aiGoal, setAiGoal] = useState('');
@@ -73,25 +139,45 @@ export function TaskBoardPage() {
   const [isConfirmingAiDrafts, setIsConfirmingAiDrafts] = useState(false);
 
   useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedQuery(filters.q);
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [filters.q]);
+
+  const boardFilters = useMemo(
+    () => ({ ...filters, q: debouncedQuery }),
+    [debouncedQuery, filters],
+  );
+  const boardQuery = useMemo(
+    () => toBoardQuery(boardFilters),
+    [boardFilters],
+  );
+
+  useEffect(() => {
     if (!projectId) {
-      setErrorMessage('未找到项目标识');
+      setBoardError('未找到项目标识');
       setIsLoading(false);
       return;
     }
 
     let isActive = true;
+    setIsLoading(true);
+    setBoardError('');
 
     async function loadBoard() {
       try {
         const result = await apiRequest<TaskBoardResponse>(
-          `api/projects/${projectId}/tasks`,
+          `api/projects/${projectId}/tasks${boardQuery ? `?${boardQuery}` : ''}`,
         );
         if (isActive) {
           setBoard(result);
+          setLastSuccessfulBoard(result);
         }
       } catch (error: unknown) {
         if (isActive) {
-          setErrorMessage(
+          setBoardError(
             error instanceof Error
               ? error.message
               : '任务看板加载失败，请稍后重试',
@@ -108,9 +194,10 @@ export function TaskBoardPage() {
     return () => {
       isActive = false;
     };
-  }, [projectId]);
+  }, [boardQuery, boardRequestGeneration, projectId]);
 
-  const teamId = board?.teamId;
+  const visibleBoard = board ?? lastSuccessfulBoard;
+  const teamId = visibleBoard?.teamId;
 
   useEffect(() => {
     if (!teamId) {
@@ -155,6 +242,14 @@ export function TaskBoardPage() {
     };
   }, [teamId]);
 
+  function handleFiltersChange(next: TaskFilterValues) {
+    setSearchParams(toSearchParams(next));
+  }
+
+  function retryBoard() {
+    setBoardRequestGeneration((generation) => generation + 1);
+  }
+
   async function handleCreateTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!projectId || isCreating) {
@@ -180,6 +275,7 @@ export function TaskBoardPage() {
             description: description.trim(),
             priority,
             ...(assigneeId ? { assigneeId } : {}),
+            ...(dueDate ? { dueDate } : {}),
           }),
         },
       );
@@ -194,10 +290,22 @@ export function TaskBoardPage() {
             }
           : currentBoard,
       );
+      setLastSuccessfulBoard((currentBoard) =>
+        currentBoard
+          ? {
+              ...currentBoard,
+              columns: {
+                ...currentBoard.columns,
+                todo: [...currentBoard.columns.todo, createdTask],
+              },
+            }
+          : currentBoard,
+      );
       setTitle('');
       setDescription('');
       setPriority('medium');
       setAssigneeId('');
+      setDueDate('');
     } catch (error: unknown) {
       setErrorMessage(
         error instanceof Error ? error.message : '任务创建失败，请稍后重试',
@@ -225,20 +333,7 @@ export function TaskBoardPage() {
           body: JSON.stringify({ status: toStatus }),
         },
       );
-      setBoard((currentBoard) =>
-        currentBoard
-          ? {
-              ...currentBoard,
-              columns: {
-                ...currentBoard.columns,
-                [fromStatus]: currentBoard.columns[fromStatus].filter(
-                  (item) => item.id !== task.id,
-                ),
-                [toStatus]: [...currentBoard.columns[toStatus], updatedTask],
-              },
-            }
-          : currentBoard,
-      );
+      moveTaskInBoards(task.id, fromStatus, toStatus, updatedTask);
     } catch (error: unknown) {
       setErrorMessage(
         error instanceof Error ? error.message : '任务状态更新失败，请稍后重试',
@@ -248,13 +343,38 @@ export function TaskBoardPage() {
     }
   }
 
+  function moveTaskInBoards(
+    taskId: string,
+    fromStatus: TaskStatus,
+    toStatus: TaskStatus,
+    updatedTask: TaskSummary,
+  ) {
+    const moveTask = (currentBoard: TaskBoardResponse | null) =>
+      currentBoard
+        ? {
+            ...currentBoard,
+            columns: {
+              ...currentBoard.columns,
+              [fromStatus]: currentBoard.columns[fromStatus].filter(
+                (item) => item.id !== taskId,
+              ),
+              [toStatus]: [...currentBoard.columns[toStatus], updatedTask],
+            },
+          }
+        : currentBoard;
+    setBoard(moveTask);
+    setLastSuccessfulBoard(moveTask);
+  }
+
   function openTaskEditor(task: TaskSummary) {
     setEditingTask(task);
-    setEditTitle(task.title);
-    setEditDescription(task.description);
-    setEditPriority(task.priority);
-    setEditAssigneeId(task.assignee?.id ?? '');
-    setEditDueDate(task.dueDate?.slice(0, 10) ?? '');
+    setEditInput({
+      title: task.title,
+      description: task.description,
+      priority: task.priority,
+      assigneeId: task.assignee?.id ?? null,
+      dueDate: task.dueDate?.slice(0, 10) ?? null,
+    });
     setTaskEditError('');
   }
 
@@ -268,7 +388,7 @@ export function TaskBoardPage() {
   }
 
   function replaceTask(updatedTask: TaskSummary) {
-    setBoard((currentBoard) =>
+    const replace = (currentBoard: TaskBoardResponse | null) =>
       currentBoard
         ? {
             ...currentBoard,
@@ -284,17 +404,17 @@ export function TaskBoardPage() {
               ),
             },
           }
-        : currentBoard,
-    );
+        : currentBoard;
+    setBoard(replace);
+    setLastSuccessfulBoard(replace);
   }
 
-  async function handleUpdateTask(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function handleUpdateTask() {
     if (!editingTask || isSavingTask) {
       return;
     }
 
-    const nextTitle = editTitle.trim();
+    const nextTitle = editInput.title.trim();
     if (nextTitle.length < 2) {
       setTaskEditError('任务标题至少需要 2 个字符');
       return;
@@ -310,10 +430,10 @@ export function TaskBoardPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             title: nextTitle,
-            description: editDescription.trim(),
-            priority: editPriority,
-            assigneeId: editAssigneeId || null,
-            dueDate: editDueDate || null,
+            description: editInput.description.trim(),
+            priority: editInput.priority,
+            assigneeId: editInput.assigneeId,
+            dueDate: editInput.dueDate,
           }),
         },
       );
@@ -328,8 +448,7 @@ export function TaskBoardPage() {
     }
   }
 
-  async function handleGenerateAiDrafts(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function handleGenerateAiDrafts() {
     if (!projectId || isGeneratingAiDrafts) {
       return;
     }
@@ -363,10 +482,10 @@ export function TaskBoardPage() {
     }
   }
 
-  function updateAiDraft(index: number, update: Partial<AiTaskDraft>) {
+  function updateAiDraft(index: number, draft: AiTaskDraft) {
     setAiDrafts((currentDrafts) =>
-      currentDrafts.map((draft, draftIndex) =>
-        draftIndex === index ? { ...draft, ...update } : draft,
+      currentDrafts.map((currentDraft, draftIndex) =>
+        draftIndex === index ? draft : currentDraft,
       ),
     );
   }
@@ -403,7 +522,7 @@ export function TaskBoardPage() {
           body: JSON.stringify({ tasks }),
         },
       );
-      setBoard((currentBoard) =>
+      const appendTasks = (currentBoard: TaskBoardResponse | null) =>
         currentBoard
           ? {
               ...currentBoard,
@@ -412,8 +531,9 @@ export function TaskBoardPage() {
                 todo: [...currentBoard.columns.todo, ...createdTasks],
               },
             }
-          : currentBoard,
-      );
+          : currentBoard;
+      setBoard(appendTasks);
+      setLastSuccessfulBoard(appendTasks);
       setAiGoal('');
       setAiDrafts([]);
     } catch (error: unknown) {
@@ -425,12 +545,14 @@ export function TaskBoardPage() {
     }
   }
 
+  const today = new Date().toISOString().slice(0, 10);
+
   return (
     <main className="workspace-shell">
       <header className="workspace-header">
         <div>
           <p className="eyebrow">项目工作区</p>
-          <h1>{board?.projectName ?? '项目任务看板'}</h1>
+          <h1>{visibleBoard?.projectName ?? '项目任务看板'}</h1>
         </div>
         <Link className="back-link" to="/workspace">
           返回工作区
@@ -443,17 +565,14 @@ export function TaskBoardPage() {
             <h2 id="task-board-title">协作任务</h2>
           </div>
         </div>
-        <form
-          className="task-create-form"
-          noValidate
-          onSubmit={handleCreateTask}
-        >
-          <div
-            className="task-field task-field-wide"
-            role="group"
-            aria-labelledby="task-title-label"
-          >
-            <label id="task-title-label" htmlFor="task-title">
+        <TaskFilters
+          values={filters}
+          members={members}
+          onChange={handleFiltersChange}
+        />
+        <form className="task-create-form" noValidate onSubmit={handleCreateTask}>
+          <div className="task-field task-field-wide">
+            <label htmlFor="task-title">
               任务标题
             </label>
             <input
@@ -465,12 +584,8 @@ export function TaskBoardPage() {
               aria-required="true"
             />
           </div>
-          <div
-            className="task-field"
-            role="group"
-            aria-labelledby="task-description-label"
-          >
-            <label id="task-description-label" htmlFor="task-description">
+          <div className="task-field">
+            <label htmlFor="task-description">
               任务说明
             </label>
             <textarea
@@ -481,32 +596,22 @@ export function TaskBoardPage() {
               placeholder="可选：补充交付说明"
             />
           </div>
-          <div
-            className="task-field"
-            role="group"
-            aria-labelledby="task-priority-label"
-          >
-            <label id="task-priority-label" htmlFor="task-priority">
+          <div className="task-field">
+            <label htmlFor="task-priority">
               优先级
             </label>
             <select
               id="task-priority"
               value={priority}
-              onChange={(event) =>
-                setPriority(event.target.value as TaskPriority)
-              }
+              onChange={(event) => setPriority(event.target.value as TaskPriority)}
             >
               <option value="low">低优先级</option>
               <option value="medium">中优先级</option>
               <option value="high">高优先级</option>
             </select>
           </div>
-          <div
-            className="task-field"
-            role="group"
-            aria-labelledby="task-assignee-label"
-          >
-            <label id="task-assignee-label" htmlFor="task-assignee">
+          <div className="task-field">
+            <label htmlFor="task-assignee">
               负责人
             </label>
             <select
@@ -523,122 +628,31 @@ export function TaskBoardPage() {
               ))}
             </select>
           </div>
+          <div className="task-field">
+            <label htmlFor="task-due-date">截止日期</label>
+            <input
+              id="task-due-date"
+              type="date"
+              value={dueDate}
+              onChange={(event) => setDueDate(event.target.value)}
+            />
+          </div>
           <button type="submit" disabled={isCreating || !projectId}>
             {isCreating ? '创建中…' : '创建任务'}
           </button>
         </form>
-        <section
-          className="ai-task-planner"
-          aria-labelledby="ai-task-planner-title"
-        >
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">AI 协作</p>
-              <h3 id="ai-task-planner-title">AI 拆解项目任务</h3>
-            </div>
-          </div>
-          <p className="ai-task-planner-hint">
-            描述项目目标，AI 将生成可编辑的任务草稿；确认后才会创建到待办列。
-          </p>
-          <form
-            className="ai-task-goal-form"
-            noValidate
-            onSubmit={handleGenerateAiDrafts}
-          >
-            <label htmlFor="ai-task-goal">项目目标</label>
-            <textarea
-              id="ai-task-goal"
-              value={aiGoal}
-              maxLength={2000}
-              placeholder="例如：完成团队协作工作区的接口设计、前端联调与验收"
-              onChange={(event) => setAiGoal(event.target.value)}
-            />
-            <button
-              type="submit"
-              disabled={
-                isGeneratingAiDrafts || isConfirmingAiDrafts || !projectId
-              }
-            >
-              {isGeneratingAiDrafts ? '生成中…' : '生成任务草稿'}
-            </button>
-          </form>
-          {aiError ? (
-            <p className="form-error" role="alert">
-              {aiError}
-            </p>
-          ) : null}
-          {aiDrafts.length > 0 ? (
-            <div className="ai-draft-section">
-              <div className="ai-draft-section-heading">
-                <h4>AI 任务草稿</h4>
-                <span>{aiDrafts.length} 条</span>
-              </div>
-              <div className="ai-draft-list">
-                {aiDrafts.map((draft, index) => (
-                  <article key={index} className="ai-draft-card">
-                    <label htmlFor={`ai-draft-title-${index}`}>
-                      草稿 {index + 1} 标题
-                    </label>
-                    <input
-                      id={`ai-draft-title-${index}`}
-                      value={draft.title}
-                      maxLength={200}
-                      disabled={isConfirmingAiDrafts}
-                      onChange={(event) =>
-                        updateAiDraft(index, { title: event.target.value })
-                      }
-                    />
-                    <label htmlFor={`ai-draft-description-${index}`}>
-                      任务说明
-                    </label>
-                    <textarea
-                      id={`ai-draft-description-${index}`}
-                      value={draft.description}
-                      maxLength={5000}
-                      disabled={isConfirmingAiDrafts}
-                      onChange={(event) =>
-                        updateAiDraft(index, {
-                          description: event.target.value,
-                        })
-                      }
-                    />
-                    <label htmlFor={`ai-draft-priority-${index}`}>优先级</label>
-                    <select
-                      id={`ai-draft-priority-${index}`}
-                      value={draft.priority}
-                      disabled={isConfirmingAiDrafts}
-                      onChange={(event) =>
-                        updateAiDraft(index, {
-                          priority: event.target.value as TaskPriority,
-                        })
-                      }
-                    >
-                      <option value="low">低优先级</option>
-                      <option value="medium">中优先级</option>
-                      <option value="high">高优先级</option>
-                    </select>
-                    <button
-                      type="button"
-                      className="task-secondary-button"
-                      disabled={isConfirmingAiDrafts}
-                      onClick={() => removeAiDraft(index)}
-                    >
-                      移除草稿
-                    </button>
-                  </article>
-                ))}
-              </div>
-              <button
-                type="button"
-                className="ai-confirm-button"
-                disabled={isConfirmingAiDrafts}
-                onClick={() => void handleConfirmAiDrafts()}
-              >
-                {isConfirmingAiDrafts ? '创建中…' : '确认创建任务'}
-              </button>
-            </div>
-          ) : null}
-        </section>
+        <AiTaskPlanner
+          goal={aiGoal}
+          drafts={aiDrafts}
+          isGenerating={isGeneratingAiDrafts}
+          isConfirming={isConfirmingAiDrafts}
+          error={aiError}
+          onGoalChange={setAiGoal}
+          onDraftChange={updateAiDraft}
+          onDraftRemove={removeAiDraft}
+          onGenerate={() => void handleGenerateAiDrafts()}
+          onConfirm={() => void handleConfirmAiDrafts()}
+        />
         {membersError ? (
           <p className="form-error">负责人列表加载失败，仍可创建未指派任务。</p>
         ) : null}
@@ -647,114 +661,39 @@ export function TaskBoardPage() {
             {errorMessage}
           </p>
         ) : null}
-        {isLoading ? (
+        {boardError ? (
+          <div className="task-board-error" role="alert">
+            <p>{boardError}</p>
+            {projectId ? (
+              <button type="button" className="task-secondary-button" onClick={retryBoard}>
+                重新加载
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        {isLoading && !visibleBoard ? (
           <p className="workspace-state">正在加载任务看板…</p>
         ) : null}
         {editingTask ? (
-          <section
-            className="task-detail-panel"
-            aria-labelledby="task-detail-title"
-          >
-            <div className="section-heading">
-              <div>
-                <p className="eyebrow">任务详情</p>
-                <h3 id="task-detail-title">编辑“{editingTask.title}”</h3>
-              </div>
-            </div>
-            <form
-              className="task-detail-form"
-              noValidate
-              onSubmit={handleUpdateTask}
-            >
-              <div className="task-field task-field-wide">
-                <label htmlFor="edit-task-title">编辑任务标题</label>
-                <input
-                  id="edit-task-title"
-                  value={editTitle}
-                  maxLength={200}
-                  onChange={(event) => setEditTitle(event.target.value)}
-                  aria-required="true"
-                />
-              </div>
-              <div className="task-field">
-                <label htmlFor="edit-task-description">编辑任务说明</label>
-                <textarea
-                  id="edit-task-description"
-                  value={editDescription}
-                  maxLength={5000}
-                  onChange={(event) => setEditDescription(event.target.value)}
-                />
-              </div>
-              <div className="task-field">
-                <label htmlFor="edit-task-priority">编辑优先级</label>
-                <select
-                  id="edit-task-priority"
-                  value={editPriority}
-                  onChange={(event) =>
-                    setEditPriority(event.target.value as TaskPriority)
-                  }
-                >
-                  <option value="low">低优先级</option>
-                  <option value="medium">中优先级</option>
-                  <option value="high">高优先级</option>
-                </select>
-              </div>
-              <div className="task-field">
-                <label htmlFor="edit-task-assignee">编辑负责人</label>
-                <select
-                  id="edit-task-assignee"
-                  value={editAssigneeId}
-                  disabled={isLoadingMembers || Boolean(membersError)}
-                  onChange={(event) => setEditAssigneeId(event.target.value)}
-                >
-                  <option value="">未指派</option>
-                  {members.map((member) => (
-                    <option key={member.id} value={member.id}>
-                      {member.displayName}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="task-field">
-                <label htmlFor="edit-task-due-date">截止日期</label>
-                <input
-                  id="edit-task-due-date"
-                  type="date"
-                  value={editDueDate}
-                  onChange={(event) => setEditDueDate(event.target.value)}
-                />
-              </div>
-              {taskEditError ? (
-                <p className="form-error task-detail-error" role="alert">
-                  {taskEditError}
-                </p>
-              ) : null}
-              <div className="task-detail-actions">
-                <button type="submit" disabled={isSavingTask}>
-                  {isSavingTask ? '保存中…' : '保存修改'}
-                </button>
-                <button
-                  type="button"
-                  className="task-secondary-button"
-                  disabled={isSavingTask}
-                  onClick={closeTaskEditor}
-                >
-                  取消编辑
-                </button>
-              </div>
-            </form>
-          </section>
+          <TaskEditor
+            task={editingTask}
+            value={editInput}
+            members={members}
+            isLoadingMembers={isLoadingMembers}
+            membersError={membersError}
+            isSaving={isSavingTask}
+            error={taskEditError}
+            onChange={setEditInput}
+            onSubmit={() => void handleUpdateTask()}
+            onCancel={closeTaskEditor}
+          />
         ) : null}
-        {board ? (
+        {visibleBoard ? (
           <section className="task-status-list" aria-label="任务状态列表">
-            <div
-              className="task-status-tabs"
-              role="tablist"
-              aria-label="任务状态"
-            >
+            <div className="task-status-tabs" role="tablist" aria-label="任务状态">
               {columnDefinitions.map((column) => {
                 const isSelected = selectedStatus === column.status;
-                const taskCount = board.columns[column.status].length;
+                const taskCount = visibleBoard.columns[column.status].length;
 
                 return (
                   <button
@@ -783,68 +722,23 @@ export function TaskBoardPage() {
               {columnDefinitions
                 .filter((column) => column.status === selectedStatus)
                 .map((column) => (
-                  <section
-                    key={column.status}
-                    className="task-column"
-                    aria-label={column.title}
-                  >
+                  <section key={column.status} className="task-column" aria-label={column.title}>
                     <h3>{column.title}</h3>
-                    {board.columns[column.status].length === 0 ? (
+                    {visibleBoard.columns[column.status].length === 0 ? (
                       <p className="task-column-empty">暂时没有任务</p>
                     ) : (
                       <ul className="task-list">
-                        {board.columns[column.status].map((task) => {
-                          const nextStatus = getNextStatus(task.status);
-                          const isMoving = movingTaskId === task.id;
-
-                          return (
-                            <li key={task.id} className="task-card">
-                              <div className="task-card-main">
-                                <div className="task-card-heading">
-                                  <h4>{task.title}</h4>
-                                  <span
-                                    className={`task-priority task-priority-${task.priority}`}
-                                  >
-                                    {priorityLabels[task.priority]}
-                                  </span>
-                                </div>
-                                {task.description ? (
-                                  <p>{task.description}</p>
-                                ) : null}
-                              </div>
-                              <div className="task-card-meta">
-                                <p className="task-assignee">
-                                  负责人：
-                                  {task.assignee?.displayName ?? '未指派'}
-                                </p>
-                                {task.dueDate ? (
-                                  <p>截止日期：{task.dueDate.slice(0, 10)}</p>
-                                ) : null}
-                              </div>
-                              <div className="task-card-actions">
-                                <button
-                                  type="button"
-                                  className="task-secondary-button"
-                                  disabled={isMoving || isSavingTask}
-                                  onClick={() => openTaskEditor(task)}
-                                  aria-label={`编辑详情：${task.title}`}
-                                >
-                                  编辑详情
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={isMoving || isSavingTask}
-                                  onClick={() => void handleMoveTask(task)}
-                                  aria-label={`移动“${task.title}”到${getStatusLabel(nextStatus)}`}
-                                >
-                                  {isMoving
-                                    ? '移动中…'
-                                    : `移动到${getStatusLabel(nextStatus)}`}
-                                </button>
-                              </div>
-                            </li>
-                          );
-                        })}
+                        {visibleBoard.columns[column.status].map((task) => (
+                          <li key={task.id}>
+                            <TaskCard
+                              task={task}
+                              isMoving={movingTaskId === task.id}
+                              dueLabel={getTaskDueLabel(task, today)}
+                              onEdit={openTaskEditor}
+                              onMove={(currentTask) => void handleMoveTask(currentTask)}
+                            />
+                          </li>
+                        ))}
                       </ul>
                     )}
                   </section>

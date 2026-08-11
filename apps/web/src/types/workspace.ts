@@ -21,6 +21,18 @@ export type TaskStatus = 'todo' | 'in_progress' | 'done';
 
 export type TaskPriority = 'low' | 'medium' | 'high';
 
+export type TaskDueFilter = 'unset' | 'normal' | 'due_soon' | 'overdue';
+
+export type TaskBoardView = 'active' | 'archived';
+
+export interface TaskFilterValues {
+  q: string;
+  assigneeId: string;
+  priority: '' | TaskPriority;
+  due: '' | TaskDueFilter;
+  view: TaskBoardView;
+}
+
 export interface AiTaskDraft {
   title: string;
   description: string;
@@ -34,6 +46,7 @@ export interface TaskSummary {
   status: TaskStatus;
   priority: TaskPriority;
   dueDate: string | null;
+  archivedAt: string | null;
   createdAt: string;
   assignee: {
     id: string;
