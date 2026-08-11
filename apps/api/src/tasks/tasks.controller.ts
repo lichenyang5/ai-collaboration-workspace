@@ -18,6 +18,7 @@ import { CreateTaskDto } from './dto/create-task.dto';
 import { UpdateTaskStatusDto } from './dto/update-task-status.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
 import { CreateTaskBatchDto } from './dto/create-task-batch.dto';
+import { ArchiveTaskDto } from './dto/archive-task.dto';
 import { TaskBoardQueryDto } from './dto/task-board-query.dto';
 import { TasksService } from './tasks.service';
 
@@ -72,6 +73,16 @@ export class TasksController {
     @CurrentUser() user: CurrentUserPayload,
   ) {
     return this.tasksService.updateTaskStatus(taskId, input.status, user.id);
+  }
+
+  @Patch('tasks/:taskId/archive')
+  setTaskArchived(
+    @Param('taskId') taskId: string,
+    @Body(new ValidationPipe({ whitelist: true, transform: true }))
+    input: ArchiveTaskDto,
+    @CurrentUser() user: CurrentUserPayload,
+  ) {
+    return this.tasksService.setTaskArchived(taskId, input.archived, user.id);
   }
 
   @Patch('tasks/:taskId')

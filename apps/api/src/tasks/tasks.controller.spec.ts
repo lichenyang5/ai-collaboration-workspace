@@ -393,6 +393,7 @@ describe('Task creation', () => {
 describe('Task activities', () => {
   let app: INestApplication;
   let transaction: jest.Mock;
+  let task: Task;
   let activityRepository: {
     create: jest.Mock;
     save: jest.Mock;
@@ -432,18 +433,19 @@ describe('Task activities', () => {
       email: 'grace@example.com',
       passwordHash: 'grace-password-hash',
     };
-    const task = {
+    task = {
       id: 'task-activity-1',
       title: 'Original activity task',
       description: 'Original description',
       priority: TaskPriority.Medium,
       status: TaskStatus.Todo,
       dueDate: new Date('2026-08-12T00:00:00.000Z'),
+      archivedAt: null,
       createdAt: new Date('2026-08-10T00:00:00.000Z'),
       updatedAt: new Date('2026-08-10T00:00:00.000Z'),
       project,
       assignee: previousAssignee,
-    };
+    } as Task;
     let createdTaskCount = 0;
     const taskRepository = {
       create: jest.fn((value: object) => ({
@@ -688,6 +690,88 @@ describe('Task activities', () => {
     const response = await request(app.getHttpServer())
       .get('/api/projects/project-activity-1/task-activities')
       .set('Cookie', activityToken(outsiderId));
+
+    expect(response.status).toBe(403);
+  });
+
+  it('archives a completed active task and records the archive activity in the transaction', async () => {
+    task.status = TaskStatus.Done;
+
+    const response = await request(app.getHttpServer())
+      .patch('/api/tasks/task-activity-1/archive')
+      .set('Cookie', activityToken(ownerId))
+      .send({ archived: true });
+
+    expect(response.status).toBe(200);
+    expect(response.body.archivedAt).toEqual(expect.any(String));
+    expect(activityRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: TaskActivityEventType.Archived,
+        task: expect.objectContaining({ id: 'task-activity-1' }),
+      }),
+    );
+    expect(transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('restores an archived task and records the restore activity in the transaction', async () => {
+    task.status = TaskStatus.Done;
+    task.archivedAt = new Date('2026-08-11T10:00:00.000Z');
+
+    const response = await request(app.getHttpServer())
+      .patch('/api/tasks/task-activity-1/archive')
+      .set('Cookie', activityToken(ownerId))
+      .send({ archived: false });
+
+    expect(response.status).toBe(200);
+    expect(response.body.archivedAt).toBeNull();
+    expect(activityRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: TaskActivityEventType.Restored,
+        task: expect.objectContaining({ id: 'task-activity-1' }),
+      }),
+    );
+    expect(transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects archiving a task that is not completed', async () => {
+    const response = await request(app.getHttpServer())
+      .patch('/api/tasks/task-activity-1/archive')
+      .set('Cookie', activityToken(ownerId))
+      .send({ archived: true });
+
+    expect(response.status).toBe(409);
+  });
+
+  it('rejects archiving a task that is already archived', async () => {
+    task.status = TaskStatus.Done;
+    task.archivedAt = new Date('2026-08-11T10:00:00.000Z');
+
+    const response = await request(app.getHttpServer())
+      .patch('/api/tasks/task-activity-1/archive')
+      .set('Cookie', activityToken(ownerId))
+      .send({ archived: true });
+
+    expect(response.status).toBe(409);
+  });
+
+  it('rejects restoring a task that is already active', async () => {
+    task.status = TaskStatus.Done;
+
+    const response = await request(app.getHttpServer())
+      .patch('/api/tasks/task-activity-1/archive')
+      .set('Cookie', activityToken(ownerId))
+      .send({ archived: false });
+
+    expect(response.status).toBe(409);
+  });
+
+  it('rejects archive requests from a user outside the task project team', async () => {
+    task.status = TaskStatus.Done;
+
+    const response = await request(app.getHttpServer())
+      .patch('/api/tasks/task-activity-1/archive')
+      .set('Cookie', activityToken(outsiderId))
+      .send({ archived: true });
 
     expect(response.status).toBe(403);
   });

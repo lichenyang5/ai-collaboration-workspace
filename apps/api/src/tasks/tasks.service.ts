@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -45,6 +46,7 @@ export interface TaskSummary {
   status: TaskStatus;
   priority: TaskPriority;
   dueDate: Date | null;
+  archivedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
   assignee: TaskAssigneeSummary | null;
@@ -357,6 +359,52 @@ export class TasksService {
     */
   }
 
+  async setTaskArchived(
+    taskId: string,
+    archived: boolean,
+    userId: string,
+  ): Promise<TaskSummary> {
+    return this.dataSource.transaction(async (entityManager) => {
+      const taskRepository = entityManager.getRepository(Task);
+      const task = await taskRepository.findOne({
+        where: { id: taskId },
+        relations: { project: { team: true }, assignee: true },
+      });
+
+      if (!task) {
+        throw new NotFoundException('Task does not exist');
+      }
+
+      await this.assertTeamMembership(task.project.team.id, userId, entityManager);
+
+      if (archived) {
+        if (task.archivedAt) {
+          throw new ConflictException('Task is already archived');
+        }
+        if (task.status !== TaskStatus.Done) {
+          throw new ConflictException('Only completed tasks can be archived');
+        }
+        task.archivedAt = new Date();
+      } else {
+        if (!task.archivedAt) {
+          throw new ConflictException('Task is already active');
+        }
+        task.archivedAt = null;
+      }
+
+      const savedTask = await taskRepository.save(task);
+      await this.recordActivity(entityManager, {
+        task: savedTask,
+        actorId: userId,
+        eventType: archived
+          ? TaskActivityEventType.Archived
+          : TaskActivityEventType.Restored,
+        details: {},
+      });
+      return this.toTaskSummary(savedTask);
+    });
+  }
+
   private async updateTaskStatusInTransaction(
     taskId: string,
     status: TaskStatus,
@@ -565,6 +613,7 @@ export class TasksService {
       status: task.status,
       priority: task.priority,
       dueDate: task.dueDate,
+      archivedAt: task.archivedAt,
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
       assignee: task.assignee
