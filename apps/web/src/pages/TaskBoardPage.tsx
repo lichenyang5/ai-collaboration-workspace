@@ -109,9 +109,16 @@ export function TaskBoardPage() {
   const normalizedSearchParams = useMemo(() => toSearchParams(filters), [filters]);
   const [debouncedQuery, setDebouncedQuery] = useState(() => filters.q);
   const boardMutationGeneration = useRef(0);
+  const currentBoardView = useRef<TaskBoardView>(filters.view);
   const [board, setBoard] = useState<TaskBoardResponse | null>(null);
+  const [boardView, setBoardView] = useState<TaskBoardView | null>(null);
+  const [boardQueryKey, setBoardQueryKey] = useState<string | null>(null);
   const [lastSuccessfulBoard, setLastSuccessfulBoard] =
     useState<TaskBoardResponse | null>(null);
+  const [lastSuccessfulBoardView, setLastSuccessfulBoardView] =
+    useState<TaskBoardView | null>(null);
+  const [lastSuccessfulBoardQueryKey, setLastSuccessfulBoardQueryKey] =
+    useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [boardError, setBoardError] = useState('');
   const [boardRequestGeneration, setBoardRequestGeneration] = useState(0);
@@ -156,6 +163,10 @@ export function TaskBoardPage() {
   }, [normalizedSearchParams, searchParams, setSearchParams]);
 
   useEffect(() => {
+    currentBoardView.current = filters.view;
+  }, [filters.view]);
+
+  useEffect(() => {
     const timer = window.setTimeout(() => {
       setDebouncedQuery(filters.q);
     }, 250);
@@ -186,6 +197,7 @@ export function TaskBoardPage() {
 
     let isActive = true;
     const requestMutationGeneration = boardMutationGeneration.current;
+    const requestView = boardFilters.view;
     setIsLoading(true);
     setBoardError('');
 
@@ -199,7 +211,11 @@ export function TaskBoardPage() {
           requestMutationGeneration === boardMutationGeneration.current
         ) {
           setBoard(result);
+          setBoardView(requestView);
+          setBoardQueryKey(boardQuery);
           setLastSuccessfulBoard(result);
+          setLastSuccessfulBoardView(requestView);
+          setLastSuccessfulBoardQueryKey(boardQuery);
         }
       } catch (error: unknown) {
         if (
@@ -274,7 +290,12 @@ export function TaskBoardPage() {
     };
   }, [activityRequestGeneration, projectId]);
 
-  const visibleBoard = board ?? lastSuccessfulBoard;
+  const visibleBoard =
+    boardView === filters.view && boardQueryKey === boardQuery
+      ? board
+      : lastSuccessfulBoardView === filters.view && lastSuccessfulBoardQueryKey !== null
+        ? lastSuccessfulBoard
+        : null;
   const teamId = visibleBoard?.teamId;
 
   useEffect(() => {
@@ -325,6 +346,7 @@ export function TaskBoardPage() {
   }
 
   function handleArchiveViewChange(view: TaskBoardView) {
+    currentBoardView.current = view;
     setSearchParams(toSearchParams({ ...filters, view }));
   }
 
@@ -522,7 +544,11 @@ export function TaskBoardPage() {
     setLastSuccessfulBoard(remove);
   }
 
-  async function setTaskArchiveStatus(task: TaskSummary, archived: boolean) {
+  async function setTaskArchiveStatus(
+    task: TaskSummary,
+    archived: boolean,
+    mutationView: TaskBoardView,
+  ) {
     if (archivingTaskId === task.id) {
       return;
     }
@@ -535,8 +561,12 @@ export function TaskBoardPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ archived }),
       });
-      removeTaskFromBoards(task.id);
       invalidateBoardLoadsBeforeMutation();
+      if (currentBoardView.current === mutationView) {
+        removeTaskFromBoards(task.id);
+      } else {
+        setBoardRequestGeneration((generation) => generation + 1);
+      }
       refreshActivities();
     } catch (error: unknown) {
       setErrorMessage(
@@ -556,11 +586,11 @@ export function TaskBoardPage() {
       return;
     }
 
-    void setTaskArchiveStatus(task, true);
+    void setTaskArchiveStatus(task, true, currentBoardView.current);
   }
 
   function handleRestoreTask(task: TaskSummary) {
-    void setTaskArchiveStatus(task, false);
+    void setTaskArchiveStatus(task, false, currentBoardView.current);
   }
 
   async function handleUpdateTask() {
@@ -729,6 +759,8 @@ export function TaskBoardPage() {
           onChange={handleFiltersChange}
         />
         <TaskArchivePanel view={filters.view} onViewChange={handleArchiveViewChange} />
+        {filters.view === 'active' ? (
+          <>
         <form className="task-create-form" noValidate onSubmit={handleCreateTask}>
           <div className="task-field task-field-wide">
             <label htmlFor="task-title">
@@ -815,6 +847,8 @@ export function TaskBoardPage() {
         {membersError ? (
           <p className="form-error">负责人列表加载失败，仍可创建未指派任务。</p>
         ) : null}
+          </>
+        ) : null}
         {errorMessage ? (
           <p className="form-error" role="alert">
             {errorMessage}
@@ -833,7 +867,7 @@ export function TaskBoardPage() {
         {isLoading && !visibleBoard ? (
           <p className="workspace-state">正在加载任务看板…</p>
         ) : null}
-        {editingTask ? (
+        {editingTask && filters.view === 'active' ? (
           <TaskEditor
             task={editingTask}
             value={editInput}
