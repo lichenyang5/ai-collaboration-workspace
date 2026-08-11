@@ -384,15 +384,35 @@ export class TasksService {
         if (task.status !== TaskStatus.Done) {
           throw new ConflictException('Only completed tasks can be archived');
         }
-        task.archivedAt = new Date();
       } else {
         if (!task.archivedAt) {
           throw new ConflictException('Task is already active');
         }
-        task.archivedAt = null;
       }
 
-      const savedTask = await taskRepository.save(task);
+      const archivedAt = archived ? new Date() : null;
+      const transition = await taskRepository.update(
+        {
+          id: taskId,
+          status: TaskStatus.Done,
+          archivedAt: archived ? IsNull() : Not(IsNull()),
+        },
+        { archivedAt },
+      );
+      if (transition.affected !== 1) {
+        throw new ConflictException(
+          archived ? 'Task is already archived' : 'Task is already active',
+        );
+      }
+
+      const savedTask = await taskRepository.findOne({
+        where: { id: taskId },
+        relations: { project: { team: true }, assignee: true },
+      });
+      if (!savedTask) {
+        throw new NotFoundException('Task does not exist');
+      }
+
       await this.recordActivity(entityManager, {
         task: savedTask,
         actorId: userId,
@@ -422,6 +442,9 @@ export class TasksService {
       }
 
       await this.assertTeamMembership(task.project.team.id, userId, entityManager);
+      if (task.archivedAt) {
+        throw new ConflictException('Archived tasks cannot be modified');
+      }
       if (task.status === status) {
         return this.toTaskSummary(task);
       }
@@ -456,6 +479,9 @@ export class TasksService {
       }
 
       await this.assertTeamMembership(task.project.team.id, userId, entityManager);
+      if (task.archivedAt) {
+        throw new ConflictException('Archived tasks cannot be modified');
+      }
       const fields: Record<
         string,
         { from: string | null; to: string | null }

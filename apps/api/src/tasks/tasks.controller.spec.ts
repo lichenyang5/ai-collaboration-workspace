@@ -462,6 +462,18 @@ describe('Task activities', () => {
         ...value,
       })),
       save: jest.fn(async (value: object | object[]) => value),
+      update: jest.fn(
+        async (
+          _criteria: object,
+          changes: { archivedAt?: Date | null },
+        ) => {
+          if (!Object.prototype.hasOwnProperty.call(changes, 'archivedAt')) {
+            return { affected: 0 };
+          }
+          task.archivedAt = changes.archivedAt ?? null;
+          return { affected: 1 };
+        },
+      ),
       findOne: jest.fn(async () => task),
       find: jest.fn(async () => []),
     });
@@ -667,6 +679,34 @@ describe('Task activities', () => {
     expect(transaction).toHaveBeenCalledTimes(1);
   });
 
+  it('rejects status changes for an archived task before saving or recording activity', async () => {
+    task.status = TaskStatus.Done;
+    task.archivedAt = new Date('2026-08-11T10:00:00.000Z');
+
+    const response = await request(app.getHttpServer())
+      .patch('/api/tasks/task-activity-1/status')
+      .set('Cookie', activityToken(ownerId))
+      .send({ status: TaskStatus.InProgress });
+
+    expect(response.status).toBe(409);
+    expect(transactionTaskRepository.save).not.toHaveBeenCalled();
+    expect(activityRepository.save).not.toHaveBeenCalled();
+  });
+
+  it('rejects detail edits for an archived task before saving or recording activity', async () => {
+    task.status = TaskStatus.Done;
+    task.archivedAt = new Date('2026-08-11T10:00:00.000Z');
+
+    const response = await request(app.getHttpServer())
+      .patch('/api/tasks/task-activity-1')
+      .set('Cookie', activityToken(ownerId))
+      .send({ title: 'Archived task must stay immutable' });
+
+    expect(response.status).toBe(409);
+    expect(transactionTaskRepository.save).not.toHaveBeenCalled();
+    expect(activityRepository.save).not.toHaveBeenCalled();
+  });
+
   it('returns only safe activity summaries for an accessible project', async () => {
     const response = await request(app.getHttpServer())
       .get('/api/projects/project-activity-1/task-activities')
@@ -724,7 +764,11 @@ describe('Task activities', () => {
       where: { id: 'task-activity-1' },
       relations: { project: { team: true }, assignee: true },
     });
-    expect(transactionTaskRepository.save).toHaveBeenCalledWith(task);
+    expect(transactionTaskRepository.update).toHaveBeenCalledWith(
+      expect.objectContaining({ id: task.id, status: TaskStatus.Done }),
+      { archivedAt: expect.any(Date) },
+    );
+    expect(transactionTaskRepository.save).not.toHaveBeenCalled();
     expect(globalTaskRepository.findOne).not.toHaveBeenCalled();
     expect(globalTaskRepository.save).not.toHaveBeenCalled();
     expect(transaction).toHaveBeenCalledTimes(1);
@@ -741,6 +785,7 @@ describe('Task activities', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.archivedAt).toBeNull();
+    expect(response.body.status).toBe(TaskStatus.Done);
     expect(activityRepository.save).toHaveBeenCalledWith(
       expect.objectContaining({
         eventType: TaskActivityEventType.Restored,
@@ -751,7 +796,11 @@ describe('Task activities', () => {
       where: { id: 'task-activity-1' },
       relations: { project: { team: true }, assignee: true },
     });
-    expect(transactionTaskRepository.save).toHaveBeenCalledWith(task);
+    expect(transactionTaskRepository.update).toHaveBeenCalledWith(
+      expect.objectContaining({ id: task.id, status: TaskStatus.Done }),
+      { archivedAt: null },
+    );
+    expect(transactionTaskRepository.save).not.toHaveBeenCalled();
     expect(globalTaskRepository.findOne).not.toHaveBeenCalled();
     expect(globalTaskRepository.save).not.toHaveBeenCalled();
     expect(transaction).toHaveBeenCalledTimes(1);
