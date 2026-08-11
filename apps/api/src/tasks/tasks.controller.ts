@@ -56,6 +56,14 @@ export class TasksController {
     return this.tasksService.getTaskBoard(projectId, user.id, query);
   }
 
+  @Get('projects/:projectId/task-activities')
+  getTaskActivities(
+    @Param('projectId') projectId: string,
+    @CurrentUser() user: CurrentUserPayload,
+  ) {
+    return this.tasksService.getTaskActivities(projectId, user.id);
+  }
+
   @Patch('tasks/:taskId/status')
   updateTaskStatus(
     @Param('taskId') taskId: string,

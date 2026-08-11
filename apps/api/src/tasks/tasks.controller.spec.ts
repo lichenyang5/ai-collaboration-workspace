@@ -7,6 +7,10 @@ import request from 'supertest';
 import { AppModule } from '../app.module';
 import { Project } from '../database/entities/project.entity';
 import {
+  TaskActivity,
+  TaskActivityEventType,
+} from '../database/entities/task-activity.entity';
+import {
   Task,
   TaskPriority,
   TaskStatus,
@@ -73,6 +77,11 @@ describe('Task creation', () => {
         team: { id: 'team-1' },
       })),
     };
+    const activityRepository = {
+      create: jest.fn((value: object) => value),
+      save: jest.fn(async (value: object) => value),
+      find: jest.fn(async () => []),
+    };
     const membershipRepository = {
       findOne: jest.fn(
         async (options: { where?: { user?: { id?: string } } }) => {
@@ -102,6 +111,9 @@ describe('Task creation', () => {
       }
       if (entity === Project) {
         return projectRepository;
+      }
+      if (entity === TaskActivity) {
+        return activityRepository;
       }
       return membershipRepository;
     });
@@ -377,3 +389,311 @@ describe('Task creation', () => {
     });
   });
 });
+
+describe('Task activities', () => {
+  let app: INestApplication;
+  let transaction: jest.Mock;
+  let activityRepository: {
+    create: jest.Mock;
+    save: jest.Mock;
+    find: jest.Mock;
+  };
+  let activityListRepository: {
+    create: jest.Mock;
+    save: jest.Mock;
+    find: jest.Mock;
+  };
+  const ownerId = '11111111-1111-4111-8111-111111111111';
+  const outsiderId = '22222222-2222-4222-8222-222222222222';
+  const previousAssigneeId = '33333333-3333-4333-8333-333333333333';
+  const nextAssigneeId = '44444444-4444-4444-8444-444444444444';
+
+  beforeEach(async () => {
+    const project = {
+      id: 'project-activity-1',
+      name: 'Activity project',
+      team: { id: 'team-activity-1' },
+    };
+    const owner = {
+      id: ownerId,
+      displayName: 'Project owner',
+      email: 'owner@example.com',
+      passwordHash: 'owner-password-hash',
+    };
+    const previousAssignee = {
+      id: previousAssigneeId,
+      displayName: 'Ada',
+      email: 'ada@example.com',
+      passwordHash: 'ada-password-hash',
+    };
+    const nextAssignee = {
+      id: nextAssigneeId,
+      displayName: 'Grace',
+      email: 'grace@example.com',
+      passwordHash: 'grace-password-hash',
+    };
+    const task = {
+      id: 'task-activity-1',
+      title: 'Original activity task',
+      description: 'Original description',
+      priority: TaskPriority.Medium,
+      status: TaskStatus.Todo,
+      dueDate: new Date('2026-08-12T00:00:00.000Z'),
+      createdAt: new Date('2026-08-10T00:00:00.000Z'),
+      updatedAt: new Date('2026-08-10T00:00:00.000Z'),
+      project,
+      assignee: previousAssignee,
+    };
+    let createdTaskCount = 0;
+    const taskRepository = {
+      create: jest.fn((value: object) => ({
+        id: `created-task-${++createdTaskCount}`,
+        createdAt: new Date('2026-08-11T00:00:00.000Z'),
+        updatedAt: new Date('2026-08-11T00:00:00.000Z'),
+        ...value,
+      })),
+      save: jest.fn(async (value: object | object[]) => value),
+      findOne: jest.fn(async () => task),
+      find: jest.fn(async () => []),
+    };
+    const projectRepository = {
+      findOne: jest.fn(async () => project),
+    };
+    const membershipRepository = {
+      findOne: jest.fn(
+        async (options: {
+          where?: { user?: { id?: string } };
+          relations?: { user?: boolean };
+        }) => {
+          const userId = options.where?.user?.id;
+          if (userId === outsiderId) {
+            return null;
+          }
+
+          const user =
+            userId === previousAssigneeId
+              ? previousAssignee
+              : userId === nextAssigneeId
+                ? nextAssignee
+                : owner;
+          return options.relations?.user ? { id: `member-${user.id}`, user } : { id: `member-${user.id}` };
+        },
+      ),
+    };
+    const listActivity = {
+      id: 'activity-list-1',
+      eventType: TaskActivityEventType.Created,
+      details: {},
+      createdAt: new Date('2026-08-11T08:30:00.000Z'),
+      task: { id: task.id, title: task.title },
+      actor: owner,
+    };
+    activityRepository = {
+      create: jest.fn((value: object) => ({
+        id: 'new-activity-1',
+        createdAt: new Date('2026-08-11T09:00:00.000Z'),
+        ...value,
+      })),
+      save: jest.fn(async (value: object) => value),
+      find: jest.fn(async () => []),
+    };
+    activityListRepository = {
+      create: jest.fn((value: object) => value),
+      save: jest.fn(async (value: object) => value),
+      find: jest.fn(async () => [listActivity]),
+    };
+    const repositoryFor = (
+      entity: unknown,
+      taskActivityRepository: typeof activityRepository,
+    ) => {
+      if (entity === Task) {
+        return taskRepository;
+      }
+      if (entity === Project) {
+        return projectRepository;
+      }
+      if (entity === TeamMember) {
+        return membershipRepository;
+      }
+      if (entity === TaskActivity) {
+        return taskActivityRepository;
+      }
+      throw new Error('Unexpected repository');
+    };
+    const getRepository = jest.fn((entity: unknown) =>
+      repositoryFor(entity, activityListRepository),
+    );
+    const transactionGetRepository = jest.fn((entity: unknown) =>
+      repositoryFor(entity, activityRepository),
+    );
+    transaction = jest.fn(
+      async (
+        callback: (entityManager: {
+          getRepository: typeof transactionGetRepository;
+        }) => Promise<unknown>,
+      ) => callback({ getRepository: transactionGetRepository }),
+    );
+    const dataSource = { getRepository, transaction };
+
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(getRepositoryToken(User))
+      .useValue({})
+      .overrideProvider(getDataSourceToken())
+      .useValue(dataSource)
+      .overrideProvider(SiliconFlowTaskPlanningService)
+      .useValue({ generateTaskDrafts: jest.fn() })
+      .compile();
+
+    app = moduleRef.createNestApplication();
+    app.setGlobalPrefix('api');
+    app.use(cookieParser());
+    await app.init();
+  });
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  it('records a created activity in the same transaction as task creation', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/api/projects/project-activity-1/tasks')
+      .set('Cookie', activityToken(ownerId))
+      .send({ title: 'Create activity record', priority: TaskPriority.High });
+
+    expect(response.status).toBe(201);
+    expect(activityRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: TaskActivityEventType.Created }),
+    );
+    expect(transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('records a created activity for every task in one batch transaction', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/api/projects/project-activity-1/tasks/batch')
+      .set('Cookie', activityToken(ownerId))
+      .send({
+        tasks: [
+          { title: 'First batch activity', priority: TaskPriority.Low },
+          { title: 'Second batch activity', priority: TaskPriority.High },
+        ],
+      });
+
+    expect(response.status).toBe(201);
+    expect(activityRepository.save).toHaveBeenCalledTimes(2);
+    expect(activityRepository.save).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ eventType: TaskActivityEventType.Created }),
+    );
+    expect(activityRepository.save).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ eventType: TaskActivityEventType.Created }),
+    );
+    expect(transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('records title and due-date edits as stable updated field details', async () => {
+    const response = await request(app.getHttpServer())
+      .patch('/api/tasks/task-activity-1')
+      .set('Cookie', activityToken(ownerId))
+      .send({ title: 'Renamed activity task', dueDate: '2026-08-20' });
+
+    expect(response.status).toBe(200);
+    expect(activityRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: TaskActivityEventType.Updated,
+        details: {
+          fields: {
+            title: { from: 'Original activity task', to: 'Renamed activity task' },
+            dueDate: { from: '2026-08-12', to: '2026-08-20' },
+          },
+        },
+      }),
+    );
+    expect(transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('records an assignee edit with display-name details', async () => {
+    const response = await request(app.getHttpServer())
+      .patch('/api/tasks/task-activity-1')
+      .set('Cookie', activityToken(ownerId))
+      .send({ assigneeId: nextAssigneeId });
+
+    expect(response.status).toBe(200);
+    expect(activityRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: TaskActivityEventType.AssigneeChanged,
+        details: { fromDisplayName: 'Ada', toDisplayName: 'Grace' },
+      }),
+    );
+    expect(transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not write an updated activity for a no-op edit', async () => {
+    const response = await request(app.getHttpServer())
+      .patch('/api/tasks/task-activity-1')
+      .set('Cookie', activityToken(ownerId))
+      .send({ title: 'Original activity task' });
+
+    expect(response.status).toBe(200);
+    expect(activityRepository.save).not.toHaveBeenCalled();
+    expect(transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('records a status transition with stable from and to details', async () => {
+    const response = await request(app.getHttpServer())
+      .patch('/api/tasks/task-activity-1/status')
+      .set('Cookie', activityToken(ownerId))
+      .send({ status: TaskStatus.InProgress });
+
+    expect(response.status).toBe(200);
+    expect(activityRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: TaskActivityEventType.StatusChanged,
+        details: { from: TaskStatus.Todo, to: TaskStatus.InProgress },
+      }),
+    );
+    expect(transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns only safe activity summaries for an accessible project', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/api/projects/project-activity-1/task-activities')
+      .set('Cookie', activityToken(ownerId));
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([
+      {
+        id: 'activity-list-1',
+        eventType: TaskActivityEventType.Created,
+        details: {},
+        createdAt: '2026-08-11T08:30:00.000Z',
+        task: { id: 'task-activity-1', title: 'Original activity task' },
+        actor: {
+          id: ownerId,
+          displayName: 'Project owner',
+          email: 'owner@example.com',
+        },
+      },
+    ]);
+    expect(response.body[0].actor).not.toHaveProperty('passwordHash');
+    expect(activityListRepository.find).toHaveBeenCalledWith({
+      where: { task: { project: { id: 'project-activity-1' } } },
+      relations: { task: true, actor: true },
+      order: { createdAt: 'DESC' },
+      take: 50,
+    });
+  });
+
+  it('rejects activity access by a user outside the project team', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/api/projects/project-activity-1/task-activities')
+      .set('Cookie', activityToken(outsiderId));
+
+    expect(response.status).toBe(403);
+  });
+});
+
+function activityToken(userId: string): string {
+  const token = new JwtService({ secret: 'test-secret' }).sign({ sub: userId });
+  return `access_token=${token}`;
+}

@@ -16,6 +16,10 @@ import {
 } from 'typeorm';
 import { Project } from '../database/entities/project.entity';
 import {
+  TaskActivity,
+  TaskActivityEventType,
+} from '../database/entities/task-activity.entity';
+import {
   Task,
   TaskPriority,
   TaskStatus,
@@ -52,6 +56,23 @@ export interface TaskBoardColumns {
   done: TaskSummary[];
 }
 
+export interface TaskActivitySummary {
+  id: string;
+  eventType: TaskActivityEventType;
+  details: Record<string, unknown>;
+  createdAt: Date;
+  task: { id: string; title: string };
+  actor: { id: string; displayName: string; email: string };
+}
+
+type TaskActivityDetails =
+  | { fields: Record<string, { from: string | null; to: string | null }> }
+  | { from: TaskStatus; to: TaskStatus }
+  | { fromDisplayName: string | null; toDisplayName: string | null }
+  | Record<string, never>;
+
+type RepositoryManager = Pick<DataSource, 'getRepository'>;
+
 @Injectable()
 export class TasksService {
   constructor(private readonly dataSource: DataSource) {}
@@ -62,22 +83,34 @@ export class TasksService {
     userId: string,
   ): Promise<TaskSummary> {
     const project = await this.getAccessibleProject(projectId, userId);
-    const taskRepository = this.dataSource.getRepository(Task);
-    const assignee = input.assigneeId
-      ? await this.getTeamMemberUser(input.assigneeId, project.team.id)
-      : null;
-    const task = taskRepository.create({
-      title: input.title.trim(),
-      description: input.description?.trim() ?? '',
-      priority: input.priority ?? TaskPriority.Medium,
-      status: TaskStatus.Todo,
-      dueDate: input.dueDate ? normalizeUtcDate(input.dueDate) : null,
-      project,
-      assignee,
-    });
 
-    const savedTask = await taskRepository.save(task);
-    return this.toTaskSummary(savedTask);
+    return this.dataSource.transaction(async (entityManager) => {
+      const taskRepository = entityManager.getRepository(Task);
+      const assignee = input.assigneeId
+        ? await this.getTeamMemberUser(
+            input.assigneeId,
+            project.team.id,
+            entityManager,
+          )
+        : null;
+      const task = taskRepository.create({
+        title: input.title.trim(),
+        description: input.description?.trim() ?? '',
+        priority: input.priority ?? TaskPriority.Medium,
+        status: TaskStatus.Todo,
+        dueDate: input.dueDate ? normalizeUtcDate(input.dueDate) : null,
+        project,
+        assignee,
+      });
+      const savedTask = await taskRepository.save(task);
+      await this.recordActivity(entityManager, {
+        task: savedTask,
+        actorId: userId,
+        eventType: TaskActivityEventType.Created,
+        details: {},
+      });
+      return this.toTaskSummary(savedTask);
+    });
   }
 
   async createTaskBatch(
@@ -101,6 +134,14 @@ export class TasksService {
         }),
       );
       const savedTasks = await taskRepository.save(tasks);
+      for (const task of savedTasks) {
+        await this.recordActivity(entityManager, {
+          task,
+          actorId: userId,
+          eventType: TaskActivityEventType.Created,
+          details: {},
+        });
+      }
       return savedTasks.map((task) => this.toTaskSummary(task));
     });
   }
@@ -213,11 +254,29 @@ export class TasksService {
     };
   }
 
+  async getTaskActivities(
+    projectId: string,
+    userId: string,
+  ): Promise<TaskActivitySummary[]> {
+    const project = await this.getAccessibleProject(projectId, userId);
+    const activityRepository = this.dataSource.getRepository(TaskActivity);
+    const activities = await activityRepository.find({
+      where: { task: { project: { id: project.id } } },
+      relations: { task: true, actor: true },
+      order: { createdAt: 'DESC' },
+      take: 50,
+    });
+
+    return activities.map((activity) => this.toTaskActivitySummary(activity));
+  }
+
   async updateTaskStatus(
     taskId: string,
     status: TaskStatus,
     userId: string,
   ): Promise<TaskSummary> {
+    return this.updateTaskStatusInTransaction(taskId, status, userId);
+    /* Replaced by the transaction implementation below.
     const taskRepository = this.dataSource.getRepository(Task);
     const task = await taskRepository.findOne({
       where: { id: taskId },
@@ -243,6 +302,7 @@ export class TasksService {
     task.status = status;
     const savedTask = await taskRepository.save(task);
     return this.toTaskSummary(savedTask);
+    */
   }
 
   async updateTask(
@@ -250,6 +310,8 @@ export class TasksService {
     input: UpdateTaskDto,
     userId: string,
   ): Promise<TaskSummary> {
+    return this.updateTaskInTransaction(taskId, input, userId);
+    /* Replaced by the transaction implementation below.
     const taskRepository = this.dataSource.getRepository(Task);
     const task = await taskRepository.findOne({
       where: { id: taskId },
@@ -292,13 +354,197 @@ export class TasksService {
 
     const savedTask = await taskRepository.save(task);
     return this.toTaskSummary(savedTask);
+    */
+  }
+
+  private async updateTaskStatusInTransaction(
+    taskId: string,
+    status: TaskStatus,
+    userId: string,
+  ): Promise<TaskSummary> {
+    return this.dataSource.transaction(async (entityManager) => {
+      const taskRepository = entityManager.getRepository(Task);
+      const task = await taskRepository.findOne({
+        where: { id: taskId },
+        relations: { project: { team: true }, assignee: true },
+      });
+
+      if (!task) {
+        throw new NotFoundException('Task does not exist');
+      }
+
+      await this.assertTeamMembership(task.project.team.id, userId, entityManager);
+      if (task.status === status) {
+        return this.toTaskSummary(task);
+      }
+
+      const previousStatus = task.status;
+      task.status = status;
+      const savedTask = await taskRepository.save(task);
+      await this.recordActivity(entityManager, {
+        task: savedTask,
+        actorId: userId,
+        eventType: TaskActivityEventType.StatusChanged,
+        details: { from: previousStatus, to: savedTask.status },
+      });
+      return this.toTaskSummary(savedTask);
+    });
+  }
+
+  private async updateTaskInTransaction(
+    taskId: string,
+    input: UpdateTaskDto,
+    userId: string,
+  ): Promise<TaskSummary> {
+    return this.dataSource.transaction(async (entityManager) => {
+      const taskRepository = entityManager.getRepository(Task);
+      const task = await taskRepository.findOne({
+        where: { id: taskId },
+        relations: { project: { team: true }, assignee: true },
+      });
+
+      if (!task) {
+        throw new NotFoundException('Task does not exist');
+      }
+
+      await this.assertTeamMembership(task.project.team.id, userId, entityManager);
+      const fields: Record<
+        string,
+        { from: string | null; to: string | null }
+      > = {};
+      if (input.title !== undefined) {
+        const title = input.title.trim();
+        if (task.title !== title) {
+          fields.title = { from: task.title, to: title };
+          task.title = title;
+        }
+      }
+      if (input.description !== undefined) {
+        const description = input.description.trim();
+        if (task.description !== description) {
+          fields.description = { from: task.description, to: description };
+          task.description = description;
+        }
+      }
+      if (input.priority !== undefined && task.priority !== input.priority) {
+        fields.priority = { from: task.priority, to: input.priority };
+        task.priority = input.priority;
+      }
+      if (input.dueDate !== undefined) {
+        const dueDate = input.dueDate ? normalizeUtcDate(input.dueDate) : null;
+        const previousDueDate = this.toActivityDate(task.dueDate);
+        const nextDueDate = this.toActivityDate(dueDate);
+        if (previousDueDate !== nextDueDate) {
+          fields.dueDate = { from: previousDueDate, to: nextDueDate };
+          task.dueDate = dueDate;
+        }
+      }
+
+      let assigneeDetails:
+        | { fromDisplayName: string | null; toDisplayName: string | null }
+        | undefined;
+      if (input.assigneeId !== undefined) {
+        const currentAssigneeId = task.assignee?.id ?? null;
+        const nextAssigneeId = input.assigneeId ?? null;
+        if (currentAssigneeId !== nextAssigneeId) {
+          const assignee = nextAssigneeId
+            ? await this.getTeamMemberUser(
+                nextAssigneeId,
+                task.project.team.id,
+                entityManager,
+              )
+            : null;
+          assigneeDetails = {
+            fromDisplayName: task.assignee?.displayName ?? null,
+            toDisplayName: assignee?.displayName ?? null,
+          };
+          task.assignee = assignee;
+        }
+      }
+
+      if (Object.keys(fields).length === 0 && !assigneeDetails) {
+        return this.toTaskSummary(task);
+      }
+
+      const savedTask = await taskRepository.save(task);
+      if (Object.keys(fields).length > 0) {
+        await this.recordActivity(entityManager, {
+          task: savedTask,
+          actorId: userId,
+          eventType: TaskActivityEventType.Updated,
+          details: { fields },
+        });
+      }
+      if (assigneeDetails) {
+        await this.recordActivity(entityManager, {
+          task: savedTask,
+          actorId: userId,
+          eventType: TaskActivityEventType.AssigneeChanged,
+          details: assigneeDetails,
+        });
+      }
+      return this.toTaskSummary(savedTask);
+    });
+  }
+
+  private async recordActivity(
+    manager: RepositoryManager,
+    input: {
+      task: Task;
+      actorId: string;
+      eventType: TaskActivityEventType;
+      details: TaskActivityDetails;
+    },
+  ): Promise<void> {
+    const activityRepository = manager.getRepository(TaskActivity);
+    const activity = activityRepository.create({
+      task: input.task,
+      actor: { id: input.actorId } as User,
+      eventType: input.eventType,
+      details: input.details,
+    });
+    await activityRepository.save(activity);
+  }
+
+  private toTaskActivitySummary(activity: TaskActivity): TaskActivitySummary {
+    return {
+      id: activity.id,
+      eventType: activity.eventType,
+      details: activity.details,
+      createdAt: activity.createdAt,
+      task: { id: activity.task.id, title: activity.task.title },
+      actor: {
+        id: activity.actor.id,
+        displayName: activity.actor.displayName,
+        email: activity.actor.email,
+      },
+    };
+  }
+
+  private toActivityDate(value: Date | null): string | null {
+    return value ? value.toISOString().slice(0, 10) : null;
+  }
+
+  private async assertTeamMembership(
+    teamId: string,
+    userId: string,
+    manager: RepositoryManager,
+  ): Promise<void> {
+    const membership = await manager.getRepository(TeamMember).findOne({
+      where: { team: { id: teamId }, user: { id: userId } },
+    });
+
+    if (!membership) {
+      throw new ForbiddenException('You are not a team member');
+    }
   }
 
   private async getTeamMemberUser(
     userId: string,
     teamId: string,
+    manager: RepositoryManager = this.dataSource,
   ): Promise<User> {
-    const membershipRepository = this.dataSource.getRepository(TeamMember);
+    const membershipRepository = manager.getRepository(TeamMember);
     const membership = await membershipRepository.findOne({
       where: { team: { id: teamId }, user: { id: userId } },
       relations: { user: true },
