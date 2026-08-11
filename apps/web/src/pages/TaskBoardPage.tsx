@@ -41,6 +41,10 @@ const viewValues = new Set<TaskBoardView>(['active', 'archived']);
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+interface BoardMutationContext {
+  generation: number;
+}
+
 function getNextStatus(status: TaskStatus): TaskStatus {
   if (status === 'todo') {
     return 'in_progress';
@@ -110,6 +114,9 @@ export function TaskBoardPage() {
   const [debouncedQuery, setDebouncedQuery] = useState(() => filters.q);
   const boardMutationGeneration = useRef(0);
   const currentBoardView = useRef<TaskBoardView>(filters.view);
+  const boardContext = useRef<{ key: string; generation: number } | null>(
+    null,
+  );
   const [board, setBoard] = useState<TaskBoardResponse | null>(null);
   const [boardView, setBoardView] = useState<TaskBoardView | null>(null);
   const [boardQueryKey, setBoardQueryKey] = useState<string | null>(null);
@@ -183,6 +190,12 @@ export function TaskBoardPage() {
     [boardFilters],
   );
   const isKeywordDebouncing = filters.q !== debouncedQuery;
+  if (!isKeywordDebouncing && boardContext.current?.key !== boardQuery) {
+    boardContext.current = {
+      key: boardQuery,
+      generation: (boardContext.current?.generation ?? 0) + 1,
+    };
+  }
 
   useEffect(() => {
     if (!projectId) {
@@ -363,12 +376,23 @@ export function TaskBoardPage() {
     boardMutationGeneration.current += 1;
   }
 
+  function captureBoardMutationContext(): BoardMutationContext {
+    return { generation: boardContext.current?.generation ?? 0 };
+  }
+
   function reconcileSuccessfulBoardMutation(
-    mutationView: TaskBoardView,
+    mutationContext: BoardMutationContext,
     updateCurrentView: () => void,
   ) {
     invalidateBoardLoadsBeforeMutation();
-    if (currentBoardView.current === mutationView) {
+    const currentContext = boardContext.current;
+    const hasCompatibleSnapshot =
+      board !== null &&
+      boardView === filters.view;
+    if (
+      currentContext?.generation === mutationContext.generation &&
+      hasCompatibleSnapshot
+    ) {
       updateCurrentView();
       return;
     }
@@ -388,7 +412,7 @@ export function TaskBoardPage() {
       return;
     }
 
-    const mutationView = currentBoardView.current;
+    const mutationContext = captureBoardMutationContext();
     setErrorMessage('');
     setIsCreating(true);
     try {
@@ -406,7 +430,7 @@ export function TaskBoardPage() {
           }),
         },
       );
-      reconcileSuccessfulBoardMutation(mutationView, () => {
+      reconcileSuccessfulBoardMutation(mutationContext, () => {
         setBoard((currentBoard) =>
           currentBoard
             ? {
@@ -452,7 +476,7 @@ export function TaskBoardPage() {
 
     const fromStatus = task.status;
     const toStatus = getNextStatus(fromStatus);
-    const mutationView = currentBoardView.current;
+    const mutationContext = captureBoardMutationContext();
     setErrorMessage('');
     setMovingTaskId(task.id);
     try {
@@ -464,7 +488,7 @@ export function TaskBoardPage() {
           body: JSON.stringify({ status: toStatus }),
         },
       );
-      reconcileSuccessfulBoardMutation(mutationView, () =>
+      reconcileSuccessfulBoardMutation(mutationContext, () =>
         moveTaskInBoards(task.id, fromStatus, toStatus, updatedTask),
       );
       refreshActivities();
@@ -564,7 +588,7 @@ export function TaskBoardPage() {
   async function setTaskArchiveStatus(
     task: TaskSummary,
     archived: boolean,
-    mutationView: TaskBoardView,
+    mutationContext: BoardMutationContext,
   ) {
     if (archivingTaskId === task.id) {
       return;
@@ -578,7 +602,7 @@ export function TaskBoardPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ archived }),
       });
-      reconcileSuccessfulBoardMutation(mutationView, () =>
+      reconcileSuccessfulBoardMutation(mutationContext, () =>
         removeTaskFromBoards(task.id),
       );
       refreshActivities();
@@ -600,11 +624,11 @@ export function TaskBoardPage() {
       return;
     }
 
-    void setTaskArchiveStatus(task, true, currentBoardView.current);
+    void setTaskArchiveStatus(task, true, captureBoardMutationContext());
   }
 
   function handleRestoreTask(task: TaskSummary) {
-    void setTaskArchiveStatus(task, false, currentBoardView.current);
+    void setTaskArchiveStatus(task, false, captureBoardMutationContext());
   }
 
   async function handleUpdateTask() {
@@ -618,7 +642,7 @@ export function TaskBoardPage() {
       return;
     }
 
-    const mutationView = currentBoardView.current;
+    const mutationContext = captureBoardMutationContext();
     setTaskEditError('');
     setIsSavingTask(true);
     try {
@@ -636,7 +660,7 @@ export function TaskBoardPage() {
           }),
         },
       );
-      reconcileSuccessfulBoardMutation(mutationView, () => replaceTask(updatedTask));
+      reconcileSuccessfulBoardMutation(mutationContext, () => replaceTask(updatedTask));
       refreshActivities();
       setEditingTask(null);
     } catch (error: unknown) {
@@ -711,7 +735,7 @@ export function TaskBoardPage() {
       return;
     }
 
-    const mutationView = currentBoardView.current;
+    const mutationContext = captureBoardMutationContext();
     setAiError('');
     setIsConfirmingAiDrafts(true);
     try {
@@ -733,7 +757,7 @@ export function TaskBoardPage() {
               },
             }
           : currentBoard;
-      reconcileSuccessfulBoardMutation(mutationView, () => {
+      reconcileSuccessfulBoardMutation(mutationContext, () => {
         setBoard(appendTasks);
         setLastSuccessfulBoard(appendTasks);
       });

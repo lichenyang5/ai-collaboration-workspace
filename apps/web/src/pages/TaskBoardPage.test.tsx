@@ -1738,4 +1738,79 @@ describe('TaskBoardPage', () => {
     ).not.toBeInTheDocument();
     expect(await screen.findByRole('alert')).toHaveTextContent('状态更新后的活动刷新失败');
   });
+
+  it('reloads the current active context when an active create completes after an archived-view ABA transition', async () => {
+    const sourceTask = createTask('task-aba-source', '创建前的活动任务', 'todo');
+    const createdTask = createTask('task-aba-created', 'ABA 后创建的活动任务', 'todo');
+    const archivedTask = {
+      ...createTask('task-aba-archived', 'ABA 归档任务', 'done'),
+      archivedAt: '2026-08-10T10:00:00.000Z',
+    };
+    const createResponse = createDeferred<Response>();
+    const staleActiveLoad = createDeferred<Response>();
+    let activeTaskRequests = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/api/projects/project-1/task-activities') {
+        return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/teams/team-1/members') {
+        return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/projects/project-1/tasks' && init?.method === 'POST') {
+        return createResponse.promise;
+      }
+      if (url.pathname === '/api/projects/project-1/tasks') {
+        if (url.searchParams.get('view') === 'archived') {
+          return new Response(JSON.stringify(createBoard({ done: [archivedTask] })), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        activeTaskRequests += 1;
+        if (activeTaskRequests === 2) {
+          return staleActiveLoad.promise;
+        }
+        return new Response(
+          JSON.stringify(
+            createBoard({ todo: activeTaskRequests === 1 ? [sourceTask] : [sourceTask, createdTask] }),
+          ),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderBoard();
+    await screen.findByText(sourceTask.title);
+    await user.type(screen.getByLabelText('任务标题'), createdTask.title);
+    await user.click(screen.getByRole('button', { name: '创建任务' }));
+
+    await user.click(screen.getByRole('button', { name: '查看已归档任务' }));
+    await user.click(await screen.findByRole('tab', { name: '已完成 1' }));
+    expect(await screen.findByText(archivedTask.title)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: `恢复任务：${archivedTask.title}` })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '查看进行中的任务' }));
+    await waitFor(() => {
+      expect(activeTaskRequests).toBe(2);
+    });
+
+    await act(async () => {
+      createResponse.resolve(new Response(JSON.stringify(createdTask), { status: 201, headers: { 'Content-Type': 'application/json' } }));
+      await Promise.resolve();
+      staleActiveLoad.resolve(new Response(JSON.stringify(createBoard({ todo: [sourceTask] })), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(activeTaskRequests).toBe(3);
+    });
+    await user.click(screen.getByRole('tab', { name: '待办 2' }));
+    expect(await screen.findByText(createdTask.title)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: `恢复任务：${createdTask.title}` })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: `编辑详情：${createdTask.title}` })).toBeInTheDocument();
+  });
 });
