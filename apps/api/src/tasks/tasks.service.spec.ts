@@ -45,7 +45,7 @@ describe('TasksService board filters', () => {
     jest.useRealTimers();
   });
 
-  it('uses the UTC day after the due-soon window as the exclusive filter boundary', async () => {
+  it('uses inclusive UTC-today and exclusive day-after-due-soon boundaries', async () => {
     jest.useFakeTimers();
     jest.setSystemTime(new Date('2026-08-11T12:00:00.000Z'));
 
@@ -57,8 +57,14 @@ describe('TasksService board filters', () => {
 
     const dueSoonWhere = getLastWhere(taskRepository)[0];
     const dueSoonDate = asOperator(dueSoonWhere.dueDate);
-    expect(dueSoonDate.type).toBe('lessThan');
-    expect(dueSoonDate.value).toEqual(new Date('2026-08-15T00:00:00.000Z'));
+    expect(dueSoonDate.type).toBe('and');
+    const [todayOrLater, beforeDayAfterDueSoon] = dueSoonDate.value as FindOperator<Date>[];
+    expect(todayOrLater.type).toBe('moreThanOrEqual');
+    expect(todayOrLater.value).toEqual(new Date('2026-08-11T00:00:00.000Z'));
+    expect(beforeDayAfterDueSoon.type).toBe('lessThan');
+    expect(beforeDayAfterDueSoon.value).toEqual(
+      new Date('2026-08-15T00:00:00.000Z'),
+    );
 
     await service.getTaskBoard(
       'project-1',

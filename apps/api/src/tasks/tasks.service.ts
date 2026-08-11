@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  And,
   DataSource,
   ILike,
   IsNull,
@@ -163,7 +164,10 @@ export class TasksService {
         dueWhere.push(
           withBoardFilters({
             status: Not(TaskStatus.Done),
-            dueDate: LessThan(dayAfterDueSoon),
+            dueDate: And(
+              MoreThanOrEqual(today),
+              LessThan(dayAfterDueSoon),
+            ),
           }),
         );
         break;
