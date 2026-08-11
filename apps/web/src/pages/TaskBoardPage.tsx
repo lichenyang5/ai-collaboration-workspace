@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { AiTaskPlanner } from '../components/tasks/AiTaskPlanner';
+import { ActivityPanel } from '../components/tasks/ActivityPanel';
+import { TaskArchivePanel } from '../components/tasks/TaskArchivePanel';
 import { TaskCard } from '../components/tasks/TaskCard';
 import { TaskEditor } from '../components/tasks/TaskEditor';
 import type { UpdateTaskInput } from '../components/tasks/TaskEditor';
@@ -10,6 +12,7 @@ import { getTaskDueLabel } from '../components/tasks/task-due-state';
 import { apiRequest } from '../services/api';
 import type {
   AiTaskDraft,
+  TaskActivitySummary,
   TaskBoardResponse,
   TaskBoardView,
   TaskDueFilter,
@@ -112,6 +115,11 @@ export function TaskBoardPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [boardError, setBoardError] = useState('');
   const [boardRequestGeneration, setBoardRequestGeneration] = useState(0);
+  const activityLoadGeneration = useRef(0);
+  const [activities, setActivities] = useState<TaskActivitySummary[]>([]);
+  const [isLoadingActivities, setIsLoadingActivities] = useState(false);
+  const [activitiesError, setActivitiesError] = useState('');
+  const [activityRequestGeneration, setActivityRequestGeneration] = useState(0);
   const [errorMessage, setErrorMessage] = useState('');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -123,6 +131,7 @@ export function TaskBoardPage() {
   const [membersError, setMembersError] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const [movingTaskId, setMovingTaskId] = useState<string | null>(null);
+  const [archivingTaskId, setArchivingTaskId] = useState<string | null>(null);
   const [selectedStatus, setSelectedStatus] = useState<TaskStatus>('todo');
   const [editingTask, setEditingTask] = useState<TaskSummary | null>(null);
   const [editInput, setEditInput] = useState<UpdateTaskInput>({
@@ -221,6 +230,50 @@ export function TaskBoardPage() {
     projectId,
   ]);
 
+  useEffect(() => {
+    if (!projectId) {
+      activityLoadGeneration.current += 1;
+      setActivities([]);
+      setActivitiesError('');
+      setIsLoadingActivities(false);
+      return;
+    }
+
+    let isActive = true;
+    const requestGeneration = activityLoadGeneration.current + 1;
+    activityLoadGeneration.current = requestGeneration;
+    setIsLoadingActivities(true);
+    setActivitiesError('');
+
+    async function loadActivities() {
+      try {
+        const result = await apiRequest<TaskActivitySummary[]>(
+          `api/projects/${projectId}/task-activities`,
+        );
+        if (isActive && requestGeneration === activityLoadGeneration.current) {
+          setActivities(Array.isArray(result) ? result : []);
+        }
+      } catch (error: unknown) {
+        if (isActive && requestGeneration === activityLoadGeneration.current) {
+          setActivitiesError(
+            error instanceof Error
+              ? error.message
+              : '活动加载失败，请稍后重试',
+          );
+        }
+      } finally {
+        if (isActive && requestGeneration === activityLoadGeneration.current) {
+          setIsLoadingActivities(false);
+        }
+      }
+    }
+
+    void loadActivities();
+    return () => {
+      isActive = false;
+    };
+  }, [activityRequestGeneration, projectId]);
+
   const visibleBoard = board ?? lastSuccessfulBoard;
   const teamId = visibleBoard?.teamId;
 
@@ -271,8 +324,17 @@ export function TaskBoardPage() {
     setSearchParams(toSearchParams(next));
   }
 
+  function handleArchiveViewChange(view: TaskBoardView) {
+    setSearchParams(toSearchParams({ ...filters, view }));
+  }
+
   function retryBoard() {
     setBoardRequestGeneration((generation) => generation + 1);
+  }
+
+  function refreshActivities() {
+    activityLoadGeneration.current += 1;
+    setActivityRequestGeneration((generation) => generation + 1);
   }
 
   function invalidateBoardLoadsBeforeMutation() {
@@ -336,6 +398,7 @@ export function TaskBoardPage() {
       setPriority('medium');
       setAssigneeId('');
       setDueDate('');
+      refreshActivities();
     } catch (error: unknown) {
       setErrorMessage(
         error instanceof Error ? error.message : '任务创建失败，请稍后重试',
@@ -365,6 +428,7 @@ export function TaskBoardPage() {
       );
       moveTaskInBoards(task.id, fromStatus, toStatus, updatedTask);
       invalidateBoardLoadsBeforeMutation();
+      refreshActivities();
     } catch (error: unknown) {
       setErrorMessage(
         error instanceof Error ? error.message : '任务状态更新失败，请稍后重试',
@@ -440,6 +504,65 @@ export function TaskBoardPage() {
     setLastSuccessfulBoard(replace);
   }
 
+  function removeTaskFromBoards(taskId: string) {
+    const remove = (currentBoard: TaskBoardResponse | null) =>
+      currentBoard
+        ? {
+            ...currentBoard,
+            columns: {
+              todo: currentBoard.columns.todo.filter((task) => task.id !== taskId),
+              in_progress: currentBoard.columns.in_progress.filter(
+                (task) => task.id !== taskId,
+              ),
+              done: currentBoard.columns.done.filter((task) => task.id !== taskId),
+            },
+          }
+        : currentBoard;
+    setBoard(remove);
+    setLastSuccessfulBoard(remove);
+  }
+
+  async function setTaskArchiveStatus(task: TaskSummary, archived: boolean) {
+    if (archivingTaskId === task.id) {
+      return;
+    }
+
+    setErrorMessage('');
+    setArchivingTaskId(task.id);
+    try {
+      await apiRequest<TaskSummary>(`api/tasks/${task.id}/archive`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ archived }),
+      });
+      removeTaskFromBoards(task.id);
+      invalidateBoardLoadsBeforeMutation();
+      refreshActivities();
+    } catch (error: unknown) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : archived
+            ? '任务归档失败，请稍后重试'
+            : '任务恢复失败，请稍后重试',
+      );
+    } finally {
+      setArchivingTaskId(null);
+    }
+  }
+
+  function handleArchiveTask(task: TaskSummary) {
+    if (!window.confirm(`确定归档任务“${task.title}”吗？`)) {
+      return;
+    }
+
+    void setTaskArchiveStatus(task, true);
+  }
+
+  function handleRestoreTask(task: TaskSummary) {
+    void setTaskArchiveStatus(task, false);
+  }
+
   async function handleUpdateTask() {
     if (!editingTask || isSavingTask) {
       return;
@@ -470,6 +593,7 @@ export function TaskBoardPage() {
       );
       replaceTask(updatedTask);
       invalidateBoardLoadsBeforeMutation();
+      refreshActivities();
       setEditingTask(null);
     } catch (error: unknown) {
       setTaskEditError(
@@ -569,6 +693,7 @@ export function TaskBoardPage() {
       invalidateBoardLoadsBeforeMutation();
       setAiGoal('');
       setAiDrafts([]);
+      refreshActivities();
     } catch (error: unknown) {
       setAiError(
         error instanceof Error ? error.message : 'AI 任务创建失败，请稍后重试',
@@ -603,6 +728,7 @@ export function TaskBoardPage() {
           members={members}
           onChange={handleFiltersChange}
         />
+        <TaskArchivePanel view={filters.view} onViewChange={handleArchiveViewChange} />
         <form className="task-create-form" noValidate onSubmit={handleCreateTask}>
           <div className="task-field task-field-wide">
             <label htmlFor="task-title">
@@ -765,11 +891,15 @@ export function TaskBoardPage() {
                           <li key={task.id}>
                             <TaskCard
                               task={task}
+                              view={filters.view}
                               isMoving={movingTaskId === task.id}
                               isSaving={isSavingTask}
+                              isArchiving={archivingTaskId === task.id}
                               dueLabel={getTaskDueLabel(task, today)}
                               onEdit={openTaskEditor}
                               onMove={(currentTask) => void handleMoveTask(currentTask)}
+                              onArchive={handleArchiveTask}
+                              onRestore={handleRestoreTask}
                             />
                           </li>
                         ))}
@@ -780,6 +910,12 @@ export function TaskBoardPage() {
             </div>
           </section>
         ) : null}
+        <ActivityPanel
+          activities={activities}
+          isLoading={isLoadingActivities}
+          error={activitiesError}
+          onRetry={refreshActivities}
+        />
       </section>
     </main>
   );

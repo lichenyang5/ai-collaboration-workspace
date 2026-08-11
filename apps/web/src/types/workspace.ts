@@ -61,3 +61,19 @@ export interface TaskBoardResponse {
   teamId: string;
   columns: Record<TaskStatus, TaskSummary[]>;
 }
+
+export interface TaskActivitySummary {
+  id: string;
+  eventType:
+    | 'created'
+    | 'updated'
+    | 'status_changed'
+    | 'assignee_changed'
+    | 'archived'
+    | 'restored'
+    | string;
+  details: Record<string, unknown>;
+  createdAt: string;
+  task: { id: string; title: string };
+  actor: { id: string; displayName: string; email: string };
+}

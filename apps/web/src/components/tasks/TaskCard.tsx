@@ -1,4 +1,9 @@
-import type { TaskPriority, TaskStatus, TaskSummary } from '../../types/workspace';
+import type {
+  TaskBoardView,
+  TaskPriority,
+  TaskStatus,
+  TaskSummary,
+} from '../../types/workspace';
 
 const priorityLabels: Record<TaskPriority, string> = {
   low: '低优先级',
@@ -38,23 +43,33 @@ function dueLabelClassName(dueLabel: string): string {
 
 export interface TaskCardProps {
   task: TaskSummary;
+  view: TaskBoardView;
   isMoving: boolean;
   isSaving: boolean;
+  isArchiving: boolean;
   dueLabel: string | null;
   onEdit(task: TaskSummary): void;
   onMove(task: TaskSummary): void;
+  onArchive(task: TaskSummary): void;
+  onRestore(task: TaskSummary): void;
 }
 
 export function TaskCard({
   task,
+  view,
   isMoving,
   isSaving,
+  isArchiving,
   dueLabel,
   onEdit,
   onMove,
+  onArchive,
+  onRestore,
 }: TaskCardProps) {
   const nextStatus = getNextStatus(task.status);
-  const isActionPending = isMoving || isSaving;
+  const isActionPending = isMoving || isSaving || isArchiving;
+  const canArchive = view === 'active' && task.status === 'done';
+  const canRestore = view === 'archived';
 
   return (
     <article className="task-card">
@@ -73,23 +88,49 @@ export function TaskCard({
         {dueLabel ? <span className={dueLabelClassName(dueLabel)}>{dueLabel}</span> : null}
       </div>
       <div className="task-card-actions">
-        <button
-          type="button"
-          className="task-secondary-button"
-          disabled={isActionPending}
-          onClick={() => onEdit(task)}
-          aria-label={`编辑详情：${task.title}`}
-        >
-          编辑详情
-        </button>
-        <button
-          type="button"
-          disabled={isActionPending}
-          onClick={() => onMove(task)}
-          aria-label={`移动“${task.title}”到${statusLabels[nextStatus]}`}
-        >
-          {isMoving ? '移动中…' : `移动到${statusLabels[nextStatus]}`}
-        </button>
+        {view === 'active' ? (
+          <>
+            <button
+              type="button"
+              className="task-secondary-button"
+              disabled={isActionPending}
+              onClick={() => onEdit(task)}
+              aria-label={`编辑详情：${task.title}`}
+            >
+              编辑详情
+            </button>
+            <button
+              type="button"
+              disabled={isActionPending}
+              onClick={() => onMove(task)}
+              aria-label={`移动“${task.title}”到${statusLabels[nextStatus]}`}
+            >
+              {isMoving ? '移动中…' : `移动到${statusLabels[nextStatus]}`}
+            </button>
+          </>
+        ) : null}
+        {canArchive ? (
+          <button
+            type="button"
+            className="task-secondary-button"
+            disabled={isActionPending}
+            onClick={() => onArchive(task)}
+            aria-label={`归档任务：${task.title}`}
+          >
+            {isArchiving ? '归档中…' : '归档任务'}
+          </button>
+        ) : null}
+        {canRestore ? (
+          <button
+            type="button"
+            className="task-secondary-button"
+            disabled={isActionPending}
+            onClick={() => onRestore(task)}
+            aria-label={`恢复任务：${task.title}`}
+          >
+            {isArchiving ? '恢复中…' : '恢复任务'}
+          </button>
+        ) : null}
       </div>
     </article>
   );

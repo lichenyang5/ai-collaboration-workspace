@@ -448,6 +448,97 @@
   background: #fbfcff;
 }
 
+.task-archive-panel,
+.activity-panel {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  border: 1px solid #dfe5f0;
+  border-radius: 0.85rem;
+  background: #fbfcff;
+}
+
+.task-archive-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.task-archive-panel h3,
+.activity-panel h3 {
+  margin: 0.2rem 0 0;
+  color: #17233c;
+  font-size: 1.05rem;
+}
+
+.task-archive-panel .task-secondary-button,
+.activity-panel .task-secondary-button {
+  flex: none;
+  min-height: 2.5rem;
+  padding: 0 0.85rem;
+  border-radius: 0.6rem;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.activity-panel-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid #fecdd3;
+  border-radius: 0.7rem;
+  background: #fff7f7;
+}
+
+.activity-panel-error p {
+  margin: 0;
+  color: #c2414d;
+  font-size: 0.9rem;
+}
+
+.activity-panel-state {
+  margin: 1rem 0 0;
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+.activity-list {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0;
+  margin: 1rem 0 0;
+  list-style: none;
+}
+
+.activity-list li {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.75rem;
+  border: 1px solid #e1e6ef;
+  border-radius: 0.65rem;
+  background: #fff;
+}
+
+.activity-list p,
+.activity-list time {
+  margin: 0;
+}
+
+.activity-list p {
+  color: #24324d;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.activity-list time {
+  color: #64748b;
+  font-size: 0.8rem;
+}
+
 .task-filter-field {
   display: grid;
   gap: 0.45rem;
@@ -999,6 +1090,12 @@
   }
 
   .task-board-error {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .task-archive-panel,
+  .activity-panel-error {
     align-items: start;
     flex-direction: column;
   }

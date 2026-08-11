@@ -40,6 +40,26 @@ function createBoard(
   };
 }
 
+function createActivity(
+  id: string,
+  eventType: string,
+  title: string,
+  details: Record<string, unknown> = {},
+) {
+  return {
+    id,
+    eventType,
+    details,
+    createdAt,
+    task: { id: `task-${id}`, title },
+    actor: {
+      id: 'actor-1',
+      displayName: '王小明',
+      email: 'wang@example.com',
+    },
+  };
+}
+
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -117,7 +137,7 @@ describe('TaskBoardPage', () => {
       ],
     });
     const fetchMock = vi.fn(
-      async () =>
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
         new Response(JSON.stringify(board), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -135,7 +155,11 @@ describe('TaskBoardPage', () => {
 
     expect(screen.getByText('进行中任务标题')).toBeInTheDocument();
     expect(screen.queryByText('待办任务标题')).not.toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).includes('/api/projects/project-1/tasks'),
+      ),
+    ).toHaveLength(1);
   });
 
   it('restores supported filters from the URL and sends them with the board request', async () => {
@@ -323,13 +347,21 @@ describe('TaskBoardPage', () => {
             headers: { 'Content-Type': 'application/json' },
           });
         }
-
-        boardRequestCount += 1;
-        if (boardRequestCount === 2) {
-          return new Response(JSON.stringify({ message: '筛选加载失败' }), {
-            status: 500,
+        if (url.includes('/api/projects/project-1/task-activities')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
             headers: { 'Content-Type': 'application/json' },
           });
+        }
+
+        if (url.includes('/api/projects/project-1/tasks')) {
+          boardRequestCount += 1;
+          if (boardRequestCount === 2) {
+            return new Response(JSON.stringify({ message: '筛选加载失败' }), {
+              status: 500,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
         }
 
         return new Response(JSON.stringify(board), {
@@ -628,6 +660,12 @@ describe('TaskBoardPage', () => {
             headers: { 'Content-Type': 'application/json' },
           });
         }
+        if (url.endsWith('/api/projects/project-1/task-activities')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
         if (
           url.endsWith('/api/tasks/task-stale-board/status') &&
           init?.method === 'PATCH'
@@ -638,9 +676,11 @@ describe('TaskBoardPage', () => {
           });
         }
 
-        boardRequestCount += 1;
-        if (boardRequestCount === 2) {
-          return staleBoardResponse.promise;
+        if (url.includes('/api/projects/project-1/tasks')) {
+          boardRequestCount += 1;
+          if (boardRequestCount === 2) {
+            return staleBoardResponse.promise;
+          }
         }
 
         return new Response(
@@ -943,5 +983,313 @@ describe('TaskBoardPage', () => {
         '梳理接口边界',
       ),
     ).toBeInTheDocument();
+  });
+
+  it('shows an archive action only for completed active tasks', async () => {
+    const todoTask = createTask('task-archive-todo', '尚未完成的任务', 'todo');
+    const doneTask = createTask('task-archive-done', '可以归档的任务', 'done');
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify(createBoard({ todo: [todoTask], done: [doneTask] })), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderBoard();
+
+    await screen.findByText('尚未完成的任务');
+    expect(
+      screen.queryByRole('button', { name: '归档任务：尚未完成的任务' }),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: '已完成 1' }));
+
+    expect(
+      screen.getByRole('button', { name: '归档任务：可以归档的任务' }),
+    ).toBeInTheDocument();
+  });
+
+  it('does not send an archive request when confirmation is cancelled', async () => {
+    const doneTask = createTask('task-archive-cancel', '取消归档的任务', 'done');
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify(createBoard({ done: [doneTask] })), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('confirm', vi.fn(() => false));
+    const user = userEvent.setup();
+
+    renderBoard();
+    await screen.findByRole('tab', { name: '已完成 1' });
+    await user.click(screen.getByRole('tab', { name: '已完成 1' }));
+    await user.click(
+      screen.getByRole('button', { name: '归档任务：取消归档的任务' }),
+    );
+
+    expect(window.confirm).toHaveBeenCalledTimes(1);
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          String(input).endsWith('/api/tasks/task-archive-cancel/archive') &&
+          (init as RequestInit | undefined)?.method === 'PATCH',
+      ),
+    ).toBe(false);
+  });
+
+  it('removes a completed task from the active board after archiving succeeds', async () => {
+    const doneTask = createTask('task-archive-success', '归档成功的任务', 'done');
+    const archivedTask = {
+      ...doneTask,
+      archivedAt: '2026-08-11T10:00:00.000Z',
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (
+        String(input).endsWith('/api/tasks/task-archive-success/archive') &&
+        init?.method === 'PATCH'
+      ) {
+        return new Response(JSON.stringify(archivedTask), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      return new Response(JSON.stringify(createBoard({ done: [doneTask] })), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('confirm', vi.fn(() => true));
+    const user = userEvent.setup();
+
+    renderBoard();
+    await screen.findByRole('tab', { name: '已完成 1' });
+    await user.click(screen.getByRole('tab', { name: '已完成 1' }));
+    await user.click(
+      screen.getByRole('button', { name: '归档任务：归档成功的任务' }),
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByText('归档成功的任务')).not.toBeInTheDocument();
+    });
+  });
+
+  it('keeps the task visible and shows the API message when archiving fails', async () => {
+    const doneTask = createTask('task-archive-failure', '归档失败的任务', 'done');
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (
+        String(input).endsWith('/api/tasks/task-archive-failure/archive') &&
+        init?.method === 'PATCH'
+      ) {
+        return new Response(JSON.stringify({ message: '任务暂时无法归档' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      return new Response(JSON.stringify(createBoard({ done: [doneTask] })), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('confirm', vi.fn(() => true));
+    const user = userEvent.setup();
+
+    renderBoard();
+    await screen.findByRole('tab', { name: '已完成 1' });
+    await user.click(screen.getByRole('tab', { name: '已完成 1' }));
+    await user.click(
+      screen.getByRole('button', { name: '归档任务：归档失败的任务' }),
+    );
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('任务暂时无法归档');
+    expect(screen.getByText('归档失败的任务')).toBeInTheDocument();
+  });
+
+  it('requests archived tasks from the URL view, restores one, and reloads active done tasks', async () => {
+    const archivedTask = {
+      ...createTask('task-restore', '需要恢复的任务', 'done'),
+      archivedAt: '2026-08-10T10:00:00.000Z',
+    };
+    const restoredTask = { ...archivedTask, archivedAt: null };
+    const activeBoard = createBoard({ done: [restoredTask] });
+    const archivedBoard = createBoard({ done: [archivedTask] });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/tasks/task-restore/archive') && init?.method === 'PATCH') {
+        return new Response(JSON.stringify(restoredTask), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      const response = new URL(url).searchParams.get('view') === 'archived'
+        ? archivedBoard
+        : activeBoard;
+      return new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderBoard('/projects/project-1/board?view=archived');
+
+    await screen.findByRole('tab', { name: '已完成 1' });
+    await user.click(screen.getByRole('tab', { name: '已完成 1' }));
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        new URL(String(input)).searchParams.get('view') === 'archived',
+      ),
+    ).toBe(true);
+
+    await user.click(screen.getByRole('button', { name: '恢复任务：需要恢复的任务' }));
+    await waitFor(() => {
+      expect(screen.queryByText('需要恢复的任务')).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole('button', { name: '查看进行中的任务' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('board-location')).toHaveTextContent('/projects/project-1/board');
+      expect(screen.getByRole('tab', { name: '已完成 1' })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole('tab', { name: '已完成 1' }));
+    expect(await screen.findByText('需要恢复的任务')).toBeInTheDocument();
+  });
+
+  it('renders known activity records in Chinese and uses a readable fallback without JSON details', async () => {
+    const activities = [
+      createActivity('activity-created', 'created', '制定回归计划'),
+      createActivity(
+        'activity-unknown',
+        'future_event',
+        '未知活动任务',
+        { internalCode: 'do-not-render' },
+      ),
+    ];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/api/projects/project-1/task-activities')) {
+        return new Response(JSON.stringify(activities), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      return new Response(JSON.stringify(createBoard()), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderBoard();
+
+    expect(await screen.findByText('王小明 创建了任务《制定回归计划》')).toBeInTheDocument();
+    expect(screen.getByText('更新了任务《未知活动任务》')).toBeInTheDocument();
+    expect(screen.queryByText(/internalCode/)).not.toBeInTheDocument();
+  });
+
+  it('keeps the board usable after an activity failure and retries only activities', async () => {
+    const board = createBoard({ todo: [createTask('task-activity-retry', '活动失败仍可操作', 'todo')] });
+    let boardRequests = 0;
+    let activityRequests = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/projects/project-1/task-activities')) {
+        activityRequests += 1;
+        return new Response(JSON.stringify({ message: '活动加载失败' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url.endsWith('/api/teams/team-1/members')) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      boardRequests += 1;
+      return new Response(JSON.stringify(board), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderBoard();
+
+    expect(await screen.findByText('活动失败仍可操作')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('活动加载失败');
+    expect(boardRequests).toBe(1);
+    expect(activityRequests).toBe(1);
+
+    await user.click(screen.getByRole('button', { name: '重新加载活动' }));
+
+    await waitFor(() => {
+      expect(activityRequests).toBe(2);
+    });
+    expect(boardRequests).toBe(1);
+    expect(screen.getByText('活动失败仍可操作')).toBeInTheDocument();
+  });
+
+  it('keeps a successful task status update when its activity refresh fails', async () => {
+    const task = createTask('task-activity-refresh', '活动刷新失败不回滚', 'todo');
+    const movedTask = { ...task, status: 'in_progress' as const };
+    let activityRequests = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/projects/project-1/task-activities')) {
+        activityRequests += 1;
+        if (activityRequests === 1) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(JSON.stringify({ message: '活动刷新失败' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/tasks/task-activity-refresh/status') && init?.method === 'PATCH') {
+        return new Response(JSON.stringify(movedTask), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      return new Response(JSON.stringify(createBoard({ todo: [task] })), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderBoard();
+    await screen.findByText('活动刷新失败不回滚');
+    await waitFor(() => {
+      expect(activityRequests).toBe(1);
+    });
+
+    await user.click(
+      screen.getByRole('button', { name: '移动“活动刷新失败不回滚”到进行中' }),
+    );
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: '进行中 1' })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole('tab', { name: '进行中 1' }));
+
+    expect(await screen.findByText('活动刷新失败不回滚')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('活动刷新失败');
   });
 });
