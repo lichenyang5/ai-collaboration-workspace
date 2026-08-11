@@ -5,12 +5,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
-  Between,
   DataSource,
   ILike,
   IsNull,
   LessThan,
-  MoreThan,
+  MoreThanOrEqual,
   Not,
   type FindOptionsWhere,
 } from 'typeorm';
@@ -139,8 +138,8 @@ export class TasksService {
     }
 
     const today = normalizeUtcDate(new Date().toISOString().slice(0, 10));
-    const dueSoonEnd = new Date(today);
-    dueSoonEnd.setUTCDate(today.getUTCDate() + 3);
+    const dayAfterDueSoon = new Date(today);
+    dayAfterDueSoon.setUTCDate(today.getUTCDate() + 4);
     const dueWhere: FindOptionsWhere<Task>[] = [];
     const withBoardFilters = (condition: FindOptionsWhere<Task> = {}) => ({
       ...baseWhere,
@@ -164,7 +163,7 @@ export class TasksService {
         dueWhere.push(
           withBoardFilters({
             status: Not(TaskStatus.Done),
-            dueDate: Between(today, dueSoonEnd),
+            dueDate: LessThan(dayAfterDueSoon),
           }),
         );
         break;
@@ -176,7 +175,7 @@ export class TasksService {
           }),
           withBoardFilters({
             status: Not(TaskStatus.Done),
-            dueDate: MoreThan(dueSoonEnd),
+            dueDate: MoreThanOrEqual(dayAfterDueSoon),
           }),
         );
         break;
