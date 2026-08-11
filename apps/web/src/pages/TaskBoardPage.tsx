@@ -43,6 +43,14 @@ const uuidPattern =
 
 interface BoardMutationContext {
   generation: number;
+  key: string;
+  projectId: string | undefined;
+  projectOperationGeneration: number;
+}
+
+interface ProjectOperationContext {
+  projectId: string | undefined;
+  generation: number;
 }
 
 function getNextStatus(status: TaskStatus): TaskStatus {
@@ -112,16 +120,39 @@ export function TaskBoardPage() {
   );
   const normalizedSearchParams = useMemo(() => toSearchParams(filters), [filters]);
   const [debouncedQuery, setDebouncedQuery] = useState(() => filters.q);
+  const moveOperationGeneration = useRef(0);
+  const archiveOperationGeneration = useRef(0);
+  const isMoveOperationPending = useRef(false);
+  const isArchiveOperationPending = useRef(false);
+  const projectOperationContext = useRef<ProjectOperationContext>({
+    projectId,
+    generation: 0,
+  });
+  if (projectOperationContext.current.projectId !== projectId) {
+    projectOperationContext.current = {
+      projectId,
+      generation: projectOperationContext.current.generation + 1,
+    };
+    moveOperationGeneration.current += 1;
+    archiveOperationGeneration.current += 1;
+    isMoveOperationPending.current = false;
+    isArchiveOperationPending.current = false;
+  }
   const boardMutationGeneration = useRef(0);
   const currentBoardView = useRef<TaskBoardView>(filters.view);
-  const boardContext = useRef<{ key: string; generation: number } | null>(
-    null,
-  );
+  const boardContext = useRef<{
+    key: string;
+    generation: number;
+    projectId: string | undefined;
+  } | null>(null);
   const [board, setBoard] = useState<TaskBoardResponse | null>(null);
+  const [boardProjectId, setBoardProjectId] = useState<string | null>(null);
   const [boardView, setBoardView] = useState<TaskBoardView | null>(null);
   const [boardQueryKey, setBoardQueryKey] = useState<string | null>(null);
   const [lastSuccessfulBoard, setLastSuccessfulBoard] =
     useState<TaskBoardResponse | null>(null);
+  const [lastSuccessfulBoardProjectId, setLastSuccessfulBoardProjectId] =
+    useState<string | null>(null);
   const [lastSuccessfulBoardView, setLastSuccessfulBoardView] =
     useState<TaskBoardView | null>(null);
   const [lastSuccessfulBoardQueryKey, setLastSuccessfulBoardQueryKey] =
@@ -131,6 +162,9 @@ export function TaskBoardPage() {
   const [boardRequestGeneration, setBoardRequestGeneration] = useState(0);
   const activityLoadGeneration = useRef(0);
   const [activities, setActivities] = useState<TaskActivitySummary[]>([]);
+  const [activitiesProjectId, setActivitiesProjectId] = useState<string | null>(
+    null,
+  );
   const [isLoadingActivities, setIsLoadingActivities] = useState(false);
   const [activitiesError, setActivitiesError] = useState('');
   const [activityRequestGeneration, setActivityRequestGeneration] = useState(0);
@@ -141,6 +175,8 @@ export function TaskBoardPage() {
   const [assigneeId, setAssigneeId] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [members, setMembers] = useState<TeamMemberSummary[]>([]);
+  const [membersTeamId, setMembersTeamId] = useState<string | null>(null);
+  const [membersProjectId, setMembersProjectId] = useState<string | null>(null);
   const [isLoadingMembers, setIsLoadingMembers] = useState(false);
   const [membersError, setMembersError] = useState('');
   const [isCreating, setIsCreating] = useState(false);
@@ -148,6 +184,9 @@ export function TaskBoardPage() {
   const [archivingTaskId, setArchivingTaskId] = useState<string | null>(null);
   const [selectedStatus, setSelectedStatus] = useState<TaskStatus>('todo');
   const [editingTask, setEditingTask] = useState<TaskSummary | null>(null);
+  const [editingTaskProjectId, setEditingTaskProjectId] = useState<string | null>(
+    null,
+  );
   const [editInput, setEditInput] = useState<UpdateTaskInput>({
     title: '',
     description: '',
@@ -162,6 +201,34 @@ export function TaskBoardPage() {
   const [aiError, setAiError] = useState('');
   const [isGeneratingAiDrafts, setIsGeneratingAiDrafts] = useState(false);
   const [isConfirmingAiDrafts, setIsConfirmingAiDrafts] = useState(false);
+
+  useEffect(() => {
+    setErrorMessage('');
+    setTitle('');
+    setDescription('');
+    setPriority('medium');
+    setAssigneeId('');
+    setDueDate('');
+    setIsCreating(false);
+    setMovingTaskId(null);
+    setArchivingTaskId(null);
+    setEditingTask(null);
+    setEditingTaskProjectId(null);
+    setEditInput({
+      title: '',
+      description: '',
+      priority: 'medium',
+      assigneeId: null,
+      dueDate: null,
+    });
+    setTaskEditError('');
+    setIsSavingTask(false);
+    setAiGoal('');
+    setAiDrafts([]);
+    setAiError('');
+    setIsGeneratingAiDrafts(false);
+    setIsConfirmingAiDrafts(false);
+  }, [projectId]);
 
   useEffect(() => {
     if (searchParams.toString() !== normalizedSearchParams.toString()) {
@@ -190,10 +257,15 @@ export function TaskBoardPage() {
     [boardFilters],
   );
   const isKeywordDebouncing = filters.q !== debouncedQuery;
-  if (!isKeywordDebouncing && boardContext.current?.key !== boardQuery) {
+  if (
+    !isKeywordDebouncing &&
+    (boardContext.current?.key !== boardQuery ||
+      boardContext.current?.projectId !== projectId)
+  ) {
     boardContext.current = {
       key: boardQuery,
       generation: (boardContext.current?.generation ?? 0) + 1,
+      projectId,
     };
   }
 
@@ -209,6 +281,7 @@ export function TaskBoardPage() {
     }
 
     let isActive = true;
+    const requestProjectId = projectId;
     const requestMutationGeneration = boardMutationGeneration.current;
     const requestView = boardFilters.view;
     setIsLoading(true);
@@ -224,9 +297,11 @@ export function TaskBoardPage() {
           requestMutationGeneration === boardMutationGeneration.current
         ) {
           setBoard(result);
+          setBoardProjectId(requestProjectId);
           setBoardView(requestView);
           setBoardQueryKey(boardQuery);
           setLastSuccessfulBoard(result);
+          setLastSuccessfulBoardProjectId(requestProjectId);
           setLastSuccessfulBoardView(requestView);
           setLastSuccessfulBoardQueryKey(boardQuery);
         }
@@ -263,6 +338,7 @@ export function TaskBoardPage() {
     if (!projectId) {
       activityLoadGeneration.current += 1;
       setActivities([]);
+      setActivitiesProjectId(null);
       setActivitiesError('');
       setIsLoadingActivities(false);
       return;
@@ -271,6 +347,8 @@ export function TaskBoardPage() {
     let isActive = true;
     const requestGeneration = activityLoadGeneration.current + 1;
     activityLoadGeneration.current = requestGeneration;
+    setActivities([]);
+    setActivitiesProjectId(projectId);
     setIsLoadingActivities(true);
     setActivitiesError('');
 
@@ -304,21 +382,34 @@ export function TaskBoardPage() {
   }, [activityRequestGeneration, projectId]);
 
   const visibleBoard =
-    boardView === filters.view && boardQueryKey === boardQuery
+    boardProjectId === projectId &&
+    boardView === filters.view &&
+    boardQueryKey === boardQuery
       ? board
-      : lastSuccessfulBoardView === filters.view && lastSuccessfulBoardQueryKey !== null
+      : lastSuccessfulBoardProjectId === projectId &&
+          lastSuccessfulBoardView === filters.view &&
+          lastSuccessfulBoardQueryKey === boardQuery
         ? lastSuccessfulBoard
         : null;
   const teamId = visibleBoard?.teamId;
+  const visibleActivities =
+    activitiesProjectId === projectId ? activities : [];
+  const visibleActivitiesError =
+    activitiesProjectId === projectId ? activitiesError : '';
 
   useEffect(() => {
     if (!teamId) {
       setMembers([]);
+      setMembersTeamId(null);
+      setMembersProjectId(null);
       setAssigneeId('');
       return;
     }
 
     let isActive = true;
+    setMembers([]);
+    setMembersTeamId(teamId);
+    setMembersProjectId(projectId ?? null);
     setIsLoadingMembers(true);
     setMembersError('');
 
@@ -352,7 +443,12 @@ export function TaskBoardPage() {
     return () => {
       isActive = false;
     };
-  }, [teamId]);
+  }, [projectId, teamId]);
+
+  const hasCurrentMembersContext =
+    membersProjectId === projectId && membersTeamId === teamId;
+  const visibleMembers = hasCurrentMembersContext ? members : [];
+  const visibleMembersError = hasCurrentMembersContext ? membersError : '';
 
   function handleFiltersChange(next: TaskFilterValues) {
     setSearchParams(toSearchParams(next));
@@ -372,12 +468,43 @@ export function TaskBoardPage() {
     setActivityRequestGeneration((generation) => generation + 1);
   }
 
+  function captureProjectOperationContext(): ProjectOperationContext {
+    return { ...projectOperationContext.current };
+  }
+
+  function isCurrentProjectOperation(context: ProjectOperationContext) {
+    return (
+      context.projectId === projectOperationContext.current.projectId &&
+      context.generation === projectOperationContext.current.generation
+    );
+  }
+
+  function refreshActivitiesFor(context: ProjectOperationContext) {
+    if (isCurrentProjectOperation(context)) {
+      refreshActivities();
+    }
+  }
+
   function invalidateBoardLoadsBeforeMutation() {
     boardMutationGeneration.current += 1;
   }
 
   function captureBoardMutationContext(): BoardMutationContext {
-    return { generation: boardContext.current?.generation ?? 0 };
+    return {
+      generation: boardContext.current?.generation ?? 0,
+      key: boardContext.current?.key ?? boardQuery,
+      projectId,
+      projectOperationGeneration: projectOperationContext.current.generation,
+    };
+  }
+
+  function toProjectOperationContext(
+    mutationContext: BoardMutationContext,
+  ): ProjectOperationContext {
+    return {
+      projectId: mutationContext.projectId,
+      generation: mutationContext.projectOperationGeneration,
+    };
   }
 
   function reconcileSuccessfulBoardMutation(
@@ -388,9 +515,15 @@ export function TaskBoardPage() {
     const currentContext = boardContext.current;
     const hasCompatibleSnapshot =
       board !== null &&
+      boardProjectId === mutationContext.projectId &&
+      boardQueryKey === mutationContext.key &&
       boardView === filters.view;
     if (
       currentContext?.generation === mutationContext.generation &&
+      currentContext.key === mutationContext.key &&
+      currentContext.projectId === mutationContext.projectId &&
+      mutationContext.projectOperationGeneration ===
+        projectOperationContext.current.generation &&
       hasCompatibleSnapshot
     ) {
       updateCurrentView();
@@ -413,6 +546,7 @@ export function TaskBoardPage() {
     }
 
     const mutationContext = captureBoardMutationContext();
+    const operationContext = toProjectOperationContext(mutationContext);
     setErrorMessage('');
     setIsCreating(true);
     try {
@@ -454,29 +588,39 @@ export function TaskBoardPage() {
             : currentBoard,
         );
       });
-      setTitle('');
-      setDescription('');
-      setPriority('medium');
-      setAssigneeId('');
-      setDueDate('');
-      refreshActivities();
+      if (isCurrentProjectOperation(operationContext)) {
+        setTitle('');
+        setDescription('');
+        setPriority('medium');
+        setAssigneeId('');
+        setDueDate('');
+      }
+      refreshActivitiesFor(operationContext);
     } catch (error: unknown) {
-      setErrorMessage(
-        error instanceof Error ? error.message : '任务创建失败，请稍后重试',
-      );
+      if (isCurrentProjectOperation(operationContext)) {
+        setErrorMessage(
+          error instanceof Error ? error.message : '任务创建失败，请稍后重试',
+        );
+      }
     } finally {
-      setIsCreating(false);
+      if (isCurrentProjectOperation(operationContext)) {
+        setIsCreating(false);
+      }
     }
   }
 
   async function handleMoveTask(task: TaskSummary) {
-    if (movingTaskId === task.id) {
+    if (isMoveOperationPending.current) {
       return;
     }
 
+    isMoveOperationPending.current = true;
     const fromStatus = task.status;
     const toStatus = getNextStatus(fromStatus);
     const mutationContext = captureBoardMutationContext();
+    const operationContext = toProjectOperationContext(mutationContext);
+    const operationGeneration = moveOperationGeneration.current + 1;
+    moveOperationGeneration.current = operationGeneration;
     setErrorMessage('');
     setMovingTaskId(task.id);
     try {
@@ -491,13 +635,24 @@ export function TaskBoardPage() {
       reconcileSuccessfulBoardMutation(mutationContext, () =>
         moveTaskInBoards(task.id, fromStatus, toStatus, updatedTask),
       );
-      refreshActivities();
+      refreshActivitiesFor(operationContext);
     } catch (error: unknown) {
-      setErrorMessage(
-        error instanceof Error ? error.message : '任务状态更新失败，请稍后重试',
-      );
+      if (
+        isCurrentProjectOperation(operationContext) &&
+        operationGeneration === moveOperationGeneration.current
+      ) {
+        setErrorMessage(
+          error instanceof Error ? error.message : '任务状态更新失败，请稍后重试',
+        );
+      }
     } finally {
-      setMovingTaskId(null);
+      if (
+        isCurrentProjectOperation(operationContext) &&
+        operationGeneration === moveOperationGeneration.current
+      ) {
+        isMoveOperationPending.current = false;
+        setMovingTaskId(null);
+      }
     }
   }
 
@@ -526,6 +681,7 @@ export function TaskBoardPage() {
 
   function openTaskEditor(task: TaskSummary) {
     setEditingTask(task);
+    setEditingTaskProjectId(projectId ?? null);
     setEditInput({
       title: task.title,
       description: task.description,
@@ -542,6 +698,7 @@ export function TaskBoardPage() {
     }
 
     setEditingTask(null);
+    setEditingTaskProjectId(null);
     setTaskEditError('');
   }
 
@@ -590,10 +747,14 @@ export function TaskBoardPage() {
     archived: boolean,
     mutationContext: BoardMutationContext,
   ) {
-    if (archivingTaskId === task.id) {
+    if (isArchiveOperationPending.current) {
       return;
     }
 
+    isArchiveOperationPending.current = true;
+    const operationContext = toProjectOperationContext(mutationContext);
+    const operationGeneration = archiveOperationGeneration.current + 1;
+    archiveOperationGeneration.current = operationGeneration;
     setErrorMessage('');
     setArchivingTaskId(task.id);
     try {
@@ -605,17 +766,28 @@ export function TaskBoardPage() {
       reconcileSuccessfulBoardMutation(mutationContext, () =>
         removeTaskFromBoards(task.id),
       );
-      refreshActivities();
+      refreshActivitiesFor(operationContext);
     } catch (error: unknown) {
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : archived
-            ? '任务归档失败，请稍后重试'
-            : '任务恢复失败，请稍后重试',
-      );
+      if (
+        isCurrentProjectOperation(operationContext) &&
+        operationGeneration === archiveOperationGeneration.current
+      ) {
+        setErrorMessage(
+          error instanceof Error
+            ? error.message
+            : archived
+              ? '任务归档失败，请稍后重试'
+              : '任务恢复失败，请稍后重试',
+        );
+      }
     } finally {
-      setArchivingTaskId(null);
+      if (
+        isCurrentProjectOperation(operationContext) &&
+        operationGeneration === archiveOperationGeneration.current
+      ) {
+        isArchiveOperationPending.current = false;
+        setArchivingTaskId(null);
+      }
     }
   }
 
@@ -643,6 +815,7 @@ export function TaskBoardPage() {
     }
 
     const mutationContext = captureBoardMutationContext();
+    const operationContext = toProjectOperationContext(mutationContext);
     setTaskEditError('');
     setIsSavingTask(true);
     try {
@@ -661,14 +834,21 @@ export function TaskBoardPage() {
         },
       );
       reconcileSuccessfulBoardMutation(mutationContext, () => replaceTask(updatedTask));
-      refreshActivities();
-      setEditingTask(null);
+      refreshActivitiesFor(operationContext);
+      if (isCurrentProjectOperation(operationContext)) {
+        setEditingTask(null);
+        setEditingTaskProjectId(null);
+      }
     } catch (error: unknown) {
-      setTaskEditError(
-        error instanceof Error ? error.message : '任务详情保存失败，请稍后重试',
-      );
+      if (isCurrentProjectOperation(operationContext)) {
+        setTaskEditError(
+          error instanceof Error ? error.message : '任务详情保存失败，请稍后重试',
+        );
+      }
     } finally {
-      setIsSavingTask(false);
+      if (isCurrentProjectOperation(operationContext)) {
+        setIsSavingTask(false);
+      }
     }
   }
 
@@ -683,6 +863,7 @@ export function TaskBoardPage() {
       return;
     }
 
+    const operationContext = captureProjectOperationContext();
     setAiError('');
     setIsGeneratingAiDrafts(true);
     try {
@@ -694,15 +875,21 @@ export function TaskBoardPage() {
           body: JSON.stringify({ goal }),
         },
       );
-      setAiDrafts(drafts);
+      if (isCurrentProjectOperation(operationContext)) {
+        setAiDrafts(drafts);
+      }
     } catch (error: unknown) {
-      setAiError(
-        error instanceof Error
-          ? error.message
-          : 'AI 任务草稿生成失败，请稍后重试',
-      );
+      if (isCurrentProjectOperation(operationContext)) {
+        setAiError(
+          error instanceof Error
+            ? error.message
+            : 'AI 任务草稿生成失败，请稍后重试',
+        );
+      }
     } finally {
-      setIsGeneratingAiDrafts(false);
+      if (isCurrentProjectOperation(operationContext)) {
+        setIsGeneratingAiDrafts(false);
+      }
     }
   }
 
@@ -736,6 +923,7 @@ export function TaskBoardPage() {
     }
 
     const mutationContext = captureBoardMutationContext();
+    const operationContext = toProjectOperationContext(mutationContext);
     setAiError('');
     setIsConfirmingAiDrafts(true);
     try {
@@ -761,15 +949,21 @@ export function TaskBoardPage() {
         setBoard(appendTasks);
         setLastSuccessfulBoard(appendTasks);
       });
-      setAiGoal('');
-      setAiDrafts([]);
-      refreshActivities();
+      if (isCurrentProjectOperation(operationContext)) {
+        setAiGoal('');
+        setAiDrafts([]);
+      }
+      refreshActivitiesFor(operationContext);
     } catch (error: unknown) {
-      setAiError(
-        error instanceof Error ? error.message : 'AI 任务创建失败，请稍后重试',
-      );
+      if (isCurrentProjectOperation(operationContext)) {
+        setAiError(
+          error instanceof Error ? error.message : 'AI 任务创建失败，请稍后重试',
+        );
+      }
     } finally {
-      setIsConfirmingAiDrafts(false);
+      if (isCurrentProjectOperation(operationContext)) {
+        setIsConfirmingAiDrafts(false);
+      }
     }
   }
 
@@ -795,7 +989,7 @@ export function TaskBoardPage() {
         </div>
         <TaskFilters
           values={filters}
-          members={members}
+          members={visibleMembers}
           onChange={handleFiltersChange}
         />
         <TaskArchivePanel view={filters.view} onViewChange={handleArchiveViewChange} />
@@ -847,12 +1041,12 @@ export function TaskBoardPage() {
             </label>
             <select
               id="task-assignee"
-              value={assigneeId}
-              disabled={isLoadingMembers || Boolean(membersError)}
+              value={hasCurrentMembersContext ? assigneeId : ''}
+              disabled={isLoadingMembers || Boolean(visibleMembersError)}
               onChange={(event) => setAssigneeId(event.target.value)}
             >
               <option value="">未指派</option>
-              {members.map((member) => (
+              {visibleMembers.map((member) => (
                 <option key={member.id} value={member.id}>
                   {member.displayName}
                 </option>
@@ -884,7 +1078,7 @@ export function TaskBoardPage() {
           onGenerate={() => void handleGenerateAiDrafts()}
           onConfirm={() => void handleConfirmAiDrafts()}
         />
-        {membersError ? (
+        {visibleMembersError ? (
           <p className="form-error">负责人列表加载失败，仍可创建未指派任务。</p>
         ) : null}
           </>
@@ -907,13 +1101,15 @@ export function TaskBoardPage() {
         {isLoading && !visibleBoard ? (
           <p className="workspace-state">正在加载任务看板…</p>
         ) : null}
-        {editingTask && filters.view === 'active' ? (
+        {editingTask &&
+        editingTaskProjectId === projectId &&
+        filters.view === 'active' ? (
           <TaskEditor
             task={editingTask}
             value={editInput}
-            members={members}
+            members={visibleMembers}
             isLoadingMembers={isLoadingMembers}
-            membersError={membersError}
+            membersError={visibleMembersError}
             isSaving={isSavingTask}
             error={taskEditError}
             onChange={setEditInput}
@@ -966,9 +1162,9 @@ export function TaskBoardPage() {
                             <TaskCard
                               task={task}
                               view={filters.view}
-                              isMoving={movingTaskId === task.id}
+                              isMoving={movingTaskId !== null}
                               isSaving={isSavingTask}
-                              isArchiving={archivingTaskId === task.id}
+                              isArchiving={archivingTaskId !== null}
                               dueLabel={getTaskDueLabel(task, today)}
                               onEdit={openTaskEditor}
                               onMove={(currentTask) => void handleMoveTask(currentTask)}
@@ -985,9 +1181,9 @@ export function TaskBoardPage() {
           </section>
         ) : null}
         <ActivityPanel
-          activities={activities}
+          activities={visibleActivities}
           isLoading={isLoadingActivities}
-          error={activitiesError}
+          error={visibleActivitiesError}
           onRetry={refreshActivities}
         />
       </section>

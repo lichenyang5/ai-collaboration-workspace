@@ -1,7 +1,13 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import {
+  MemoryRouter,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from 'react-router-dom';
 import { TaskBoardPage } from './TaskBoardPage';
 import type { TaskBoardResponse, TaskSummary } from '../types/workspace';
 
@@ -27,11 +33,13 @@ function createTask(
 
 function createBoard(
   tasks: Partial<Record<TaskSummary['status'], TaskSummary[]>> = {},
+  context: Partial<Pick<TaskBoardResponse, 'projectId' | 'projectName' | 'teamId'>> = {},
 ): TaskBoardResponse {
   return {
     projectId: 'project-1',
     projectName: '任务协作平台',
     teamId: 'team-1',
+    ...context,
     columns: {
       todo: tasks.todo ?? [],
       in_progress: tasks.in_progress ?? [],
@@ -74,6 +82,26 @@ function LocationProbe() {
   return <output data-testid="board-location">{location.pathname}{location.search}</output>;
 }
 
+function ProjectNavigationProbe() {
+  const navigate = useNavigate();
+  return (
+    <>
+      <button type="button" onClick={() => navigate('/projects/project-1/board')}>
+        切换到项目一
+      </button>
+      <button
+        type="button"
+        onClick={() => navigate('/projects/project-1/board?q=foo')}
+      >
+        切换到项目一关键词
+      </button>
+      <button type="button" onClick={() => navigate('/projects/project-2/board')}>
+        切换到项目二
+      </button>
+    </>
+  );
+}
+
 function renderBoard(entry = '/projects/project-1/board') {
   return render(
     <MemoryRouter initialEntries={[entry]}>
@@ -81,6 +109,7 @@ function renderBoard(entry = '/projects/project-1/board') {
         <Route path="/projects/:projectId/board" element={<TaskBoardPage />} />
       </Routes>
       <LocationProbe />
+      <ProjectNavigationProbe />
     </MemoryRouter>,
   );
 }
@@ -333,9 +362,15 @@ describe('TaskBoardPage', () => {
     expect(finalRequest.searchParams.get('priority')).toBe('high');
   });
 
-  it('keeps the last successful board visible when filtering fails and retries it on request', async () => {
-    const board = createBoard({
-      todo: [createTask('task-stable', '保留的任务卡片', 'todo')],
+  it('hides a mismatched query snapshot while filtering is pending or failed and shows only the retried result', async () => {
+    const oldTask = createTask('task-old-filter', '旧筛选任务', 'todo');
+    const filteredTask = {
+      ...createTask('task-filtered-result', '高优先级筛选结果', 'todo'),
+      priority: 'high' as const,
+    };
+    const filteredResponse = createDeferred<Response>();
+    const initialBoard = createBoard({
+      todo: [oldTask],
     });
     let boardRequestCount = 0;
     const fetchMock = vi.fn(
@@ -357,14 +392,17 @@ describe('TaskBoardPage', () => {
         if (url.includes('/api/projects/project-1/tasks')) {
           boardRequestCount += 1;
           if (boardRequestCount === 2) {
-            return new Response(JSON.stringify({ message: '筛选加载失败' }), {
-              status: 500,
-              headers: { 'Content-Type': 'application/json' },
-            });
+            return filteredResponse.promise;
+          }
+          if (boardRequestCount === 3) {
+            return new Response(
+              JSON.stringify(createBoard({ todo: [filteredTask] })),
+              { status: 200, headers: { 'Content-Type': 'application/json' } },
+            );
           }
         }
 
-        return new Response(JSON.stringify(board), {
+        return new Response(JSON.stringify(initialBoard), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         });
@@ -374,18 +412,47 @@ describe('TaskBoardPage', () => {
     const user = userEvent.setup();
 
     renderBoard();
-    await screen.findByText('保留的任务卡片');
+    await screen.findByText(oldTask.title);
     await user.selectOptions(screen.getByLabelText('筛选优先级'), 'high');
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('筛选加载失败');
-    expect(screen.getByText('保留的任务卡片')).toBeInTheDocument();
-
-    await user.click(screen.getByRole('button', { name: '重新加载' }));
-
     await waitFor(() => {
-      expect(boardRequestCount).toBe(3);
+      expect(boardRequestCount).toBe(2);
     });
-    expect(screen.getByText('保留的任务卡片')).toBeInTheDocument();
+
+    try {
+      expect(screen.queryByText(oldTask.title)).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: `移动“${oldTask.title}”到进行中` }),
+      ).not.toBeInTheDocument();
+
+      await act(async () => {
+        filteredResponse.resolve(
+          new Response(JSON.stringify({ message: '筛选加载失败' }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        );
+        await Promise.resolve();
+      });
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('筛选加载失败');
+      expect(screen.queryByText(oldTask.title)).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: '重新加载' }));
+
+      await waitFor(() => {
+        expect(boardRequestCount).toBe(3);
+      });
+      expect(await screen.findByText(filteredTask.title)).toBeInTheDocument();
+      expect(screen.queryByText(oldTask.title)).not.toBeInTheDocument();
+    } finally {
+      filteredResponse.resolve(
+        new Response(JSON.stringify({ message: '筛选加载失败' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+    }
   });
 
   it('adds a created task to the todo column', async () => {
@@ -646,11 +713,21 @@ describe('TaskBoardPage', () => {
     }
   });
 
-  it('does not let a stale filter response overwrite a successful task mutation', async () => {
-    const originalTask = createTask('task-stale-board', '不会被旧快照覆盖', 'todo');
+  it('reloads the current filter after a mutation succeeds against a different query snapshot', async () => {
+    const originalTask = createTask('task-stale-board', '旧中优先级任务', 'todo');
     const movedTask = { ...originalTask, status: 'in_progress' as const };
-    const staleBoardResponse = createDeferred<Response>();
+    const highPriorityTask = {
+      ...createTask('task-current-filter', '当前高优先级任务', 'todo'),
+      priority: 'high' as const,
+    };
+    const obsoleteHighPriorityTask = {
+      ...createTask('task-obsolete-filter', '已废弃高优先级响应', 'todo'),
+      priority: 'high' as const,
+    };
+    const mutationResponse = createDeferred<Response>();
+    const obsoleteBoardResponse = createDeferred<Response>();
     let boardRequestCount = 0;
+    let mutationRequestCount = 0;
     const fetchMock = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
@@ -670,16 +747,20 @@ describe('TaskBoardPage', () => {
           url.endsWith('/api/tasks/task-stale-board/status') &&
           init?.method === 'PATCH'
         ) {
-          return new Response(JSON.stringify(movedTask), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          });
+          mutationRequestCount += 1;
+          return mutationResponse.promise;
         }
 
         if (url.includes('/api/projects/project-1/tasks')) {
           boardRequestCount += 1;
           if (boardRequestCount === 2) {
-            return staleBoardResponse.promise;
+            return obsoleteBoardResponse.promise;
+          }
+          if (boardRequestCount === 3) {
+            return new Response(
+              JSON.stringify(createBoard({ todo: [highPriorityTask] })),
+              { status: 200, headers: { 'Content-Type': 'application/json' } },
+            );
           }
         }
 
@@ -693,28 +774,23 @@ describe('TaskBoardPage', () => {
     const user = userEvent.setup();
 
     renderBoard();
-    await screen.findByText('不会被旧快照覆盖');
+    await screen.findByText('旧中优先级任务');
+    await user.click(
+      screen.getByRole('button', { name: '移动“旧中优先级任务”到进行中' }),
+    );
+    expect(mutationRequestCount).toBe(1);
+
     fireEvent.change(screen.getByLabelText('筛选优先级'), {
       target: { value: 'high' },
     });
     await waitFor(() => {
       expect(boardRequestCount).toBe(2);
     });
-
-    await user.click(
-      screen.getByRole('button', { name: '移动“不会被旧快照覆盖”到进行中' }),
-    );
-    await waitFor(() => {
-      expect(screen.getByRole('tab', { name: '进行中 1' })).toBeInTheDocument();
-    });
-    await user.click(screen.getByRole('tab', { name: '进行中 1' }));
-    expect(
-      screen.getByRole('tabpanel', { name: /进行中/ }),
-    ).toHaveTextContent('不会被旧快照覆盖');
+    expect(screen.queryByText('旧中优先级任务')).not.toBeInTheDocument();
 
     await act(async () => {
-      staleBoardResponse.resolve(
-        new Response(JSON.stringify(createBoard({ todo: [originalTask] })), {
+      mutationResponse.resolve(
+        new Response(JSON.stringify(movedTask), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         }),
@@ -723,10 +799,845 @@ describe('TaskBoardPage', () => {
     });
 
     await waitFor(() => {
-      expect(
-        screen.getByRole('tabpanel', { name: /进行中/ }),
-      ).toHaveTextContent('不会被旧快照覆盖');
+      expect(boardRequestCount).toBe(3);
     });
+    expect(await screen.findByText('当前高优先级任务')).toBeInTheDocument();
+    expect(screen.queryByText('旧中优先级任务')).not.toBeInTheDocument();
+
+    await act(async () => {
+      obsoleteBoardResponse.resolve(
+        new Response(
+          JSON.stringify(createBoard({ todo: [obsoleteHighPriorityTask] })),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      );
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('当前高优先级任务')).toBeInTheDocument();
+    expect(screen.queryByText('已废弃高优先级响应')).not.toBeInTheDocument();
+  });
+
+  it('reloads the current board when a mutation spans a project ABA hidden by keyword debounce', async () => {
+    const originalTask = createTask('task-debounce-aba', 'ABA 前任务', 'todo');
+    const movedTask = { ...originalTask, status: 'in_progress' as const };
+    const freshTask = createTask('task-debounce-fresh', 'ABA 后最新任务', 'todo');
+    const obsoleteTask = createTask('task-debounce-obsolete', 'ABA 旧请求任务', 'todo');
+    const mutationResponse = createDeferred<Response>();
+    const obsoleteBoardResponse = createDeferred<Response>();
+    let projectOneBoardRequests = 0;
+    let projectTwoBoardRequests = 0;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input));
+        if (
+          url.pathname === '/api/tasks/task-debounce-aba/status' &&
+          init?.method === 'PATCH'
+        ) {
+          return mutationResponse.promise;
+        }
+        if (url.pathname.endsWith('/task-activities') || url.pathname.endsWith('/members')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (url.pathname === '/api/projects/project-2/tasks') {
+          projectTwoBoardRequests += 1;
+          return new Response(
+            JSON.stringify(
+              createBoard({}, {
+                projectId: 'project-2',
+                projectName: '项目二',
+                teamId: 'team-2',
+              }),
+            ),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        if (url.pathname === '/api/projects/project-1/tasks') {
+          projectOneBoardRequests += 1;
+          if (projectOneBoardRequests === 2) {
+            return obsoleteBoardResponse.promise;
+          }
+          return new Response(
+            JSON.stringify(
+              createBoard({
+                todo: [projectOneBoardRequests === 1 ? originalTask : freshTask],
+              }),
+            ),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        throw new Error(`Unexpected request: ${url.pathname}`);
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderBoard('/projects/project-1/board?q=foo');
+    await screen.findByText(originalTask.title);
+    vi.useFakeTimers();
+
+    fireEvent.click(
+      screen.getByRole('button', { name: `移动“${originalTask.title}”到进行中` }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: '切换到项目二' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换到项目一关键词' }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(projectTwoBoardRequests).toBe(0);
+    expect(projectOneBoardRequests).toBe(2);
+
+    await act(async () => {
+      mutationResponse.resolve(
+        new Response(JSON.stringify(movedTask), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    expect(projectOneBoardRequests).toBe(3);
+    expect(screen.getByText(freshTask.title)).toBeInTheDocument();
+    expect(screen.queryByText(originalTask.title)).not.toBeInTheDocument();
+
+    await act(async () => {
+      obsoleteBoardResponse.resolve(
+        new Response(JSON.stringify(createBoard({ todo: [obsoleteTask] })), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText(freshTask.title)).toBeInTheDocument();
+    expect(screen.queryByText(obsoleteTask.title)).not.toBeInTheDocument();
+  });
+
+  it('clears the previous project board, editor, members, and activities while the next project is pending and after it fails', async () => {
+    const oldTask = createTask('task-old-project', '项目一旧任务', 'todo');
+    const oldMember = {
+      id: '11111111-1111-4111-8111-111111111111',
+      displayName: '项目一成员',
+      email: 'project-one@example.com',
+      role: 'member' as const,
+    };
+    const nextBoardResponse = createDeferred<Response>();
+    const nextActivitiesResponse = createDeferred<Response>();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/api/projects/project-2/tasks') {
+        return nextBoardResponse.promise;
+      }
+      if (url.pathname === '/api/projects/project-2/task-activities') {
+        return nextActivitiesResponse.promise;
+      }
+      if (url.pathname === '/api/projects/project-1/task-activities') {
+        return new Response(
+          JSON.stringify([createActivity('old-project', 'created', '项目一活动任务')]),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url.pathname === '/api/teams/team-1/members') {
+        return new Response(JSON.stringify([oldMember]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.pathname === '/api/projects/project-1/tasks') {
+        return new Response(JSON.stringify(createBoard({ todo: [oldTask] })), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderBoard();
+    await screen.findByText(oldTask.title);
+    expect(
+      await screen.findByText('王小明 创建了任务《项目一活动任务》'),
+    ).toBeInTheDocument();
+    expect(
+      await within(screen.getByRole('combobox', { name: '负责人' })).findByRole(
+        'option',
+        { name: oldMember.displayName },
+      ),
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole('button', { name: `编辑详情：${oldTask.title}` }),
+    );
+
+    await user.click(screen.getByRole('button', { name: '切换到项目二' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('board-location')).toHaveTextContent(
+        '/projects/project-2/board',
+      );
+    });
+
+    try {
+      expect(screen.queryByText(oldTask.title)).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: `移动“${oldTask.title}”到进行中` }),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByText(`编辑“${oldTask.title}”`)).not.toBeInTheDocument();
+      expect(screen.queryByRole('option', { name: oldMember.displayName })).not.toBeInTheDocument();
+      expect(
+        screen.queryByText('王小明 创建了任务《项目一活动任务》'),
+      ).not.toBeInTheDocument();
+
+      await act(async () => {
+        nextBoardResponse.resolve(
+          new Response(JSON.stringify({ message: '项目二看板加载失败' }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        );
+        nextActivitiesResponse.resolve(
+          new Response(JSON.stringify({ message: '项目二活动加载失败' }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        );
+        await Promise.resolve();
+      });
+
+      expect(await screen.findByText('项目二看板加载失败')).toBeInTheDocument();
+      expect(screen.queryByText(oldTask.title)).not.toBeInTheDocument();
+      expect(
+        screen.queryByText('王小明 创建了任务《项目一活动任务》'),
+      ).not.toBeInTheDocument();
+    } finally {
+      nextBoardResponse.resolve(
+        new Response(JSON.stringify({ message: '项目二看板加载失败' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+      nextActivitiesResponse.resolve(
+        new Response(JSON.stringify({ message: '项目二活动加载失败' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+    }
+  });
+
+  it('does not reconcile a completed mutation from the previous project into the current project board', async () => {
+    const sharedTaskId = 'task-shared-between-projects';
+    const projectOneTask = createTask(sharedTaskId, '项目一任务', 'todo');
+    const movedProjectOneTask = {
+      ...projectOneTask,
+      status: 'in_progress' as const,
+    };
+    const projectTwoTask = createTask(sharedTaskId, '项目二同标识任务', 'todo');
+    const statusResponse = createDeferred<Response>();
+    let projectTwoBoardRequests = 0;
+    let projectTwoActivityRequests = 0;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input));
+        if (
+          url.pathname === `/api/tasks/${sharedTaskId}/status` &&
+          init?.method === 'PATCH'
+        ) {
+          return statusResponse.promise;
+        }
+        if (url.pathname === '/api/projects/project-2/task-activities') {
+          projectTwoActivityRequests += 1;
+          return new Response(
+            JSON.stringify(
+              projectTwoActivityRequests === 1
+                ? []
+                : { message: '不应刷新的项目二活动失败' },
+            ),
+            {
+              status: projectTwoActivityRequests === 1 ? 200 : 500,
+              headers: { 'Content-Type': 'application/json' },
+            },
+          );
+        }
+        if (url.pathname === '/api/projects/project-1/task-activities') {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (url.pathname === '/api/teams/team-1/members' || url.pathname === '/api/teams/team-2/members') {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (url.pathname === '/api/projects/project-2/tasks') {
+          projectTwoBoardRequests += 1;
+          return new Response(
+            JSON.stringify(
+              createBoard(
+                { todo: [projectTwoTask] },
+                {
+                  projectId: 'project-2',
+                  projectName: '项目二',
+                  teamId: 'team-2',
+                },
+              ),
+            ),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        if (url.pathname === '/api/projects/project-1/tasks') {
+          return new Response(
+            JSON.stringify(createBoard({ todo: [projectOneTask] })),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        throw new Error(`Unexpected request: ${url.pathname}`);
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderBoard();
+    await screen.findByText(projectOneTask.title);
+    await user.click(
+      screen.getByRole('button', {
+        name: `移动“${projectOneTask.title}”到进行中`,
+      }),
+    );
+    await user.click(screen.getByRole('button', { name: '切换到项目二' }));
+    expect(await screen.findByText(projectTwoTask.title)).toBeInTheDocument();
+
+    await act(async () => {
+      statusResponse.resolve(
+        new Response(JSON.stringify(movedProjectOneTask), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(projectTwoBoardRequests).toBe(2);
+    });
+    expect(projectTwoActivityRequests).toBe(1);
+    expect(screen.queryByText('不应刷新的项目二活动失败')).not.toBeInTheDocument();
+    expect(screen.getByText(projectTwoTask.title)).toBeInTheDocument();
+    expect(screen.queryByText(projectOneTask.title)).not.toBeInTheDocument();
+  });
+
+  it('keeps the current create form independent from an old create across a project ABA transition', async () => {
+    const oldCreateResponse = createDeferred<Response>();
+    const oldCreatedTask = createTask('task-old-create', '旧项目创建任务', 'todo');
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input));
+        if (
+          url.pathname === '/api/projects/project-1/tasks' &&
+          init?.method === 'POST'
+        ) {
+          return oldCreateResponse.promise;
+        }
+        if (url.pathname.endsWith('/task-activities')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (url.pathname.endsWith('/members')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (url.pathname.endsWith('/tasks')) {
+          const nextProjectId = url.pathname.includes('project-2')
+            ? 'project-2'
+            : 'project-1';
+          return new Response(
+            JSON.stringify(
+              createBoard({}, {
+                projectId: nextProjectId,
+                projectName: nextProjectId === 'project-2' ? '项目二' : '项目一',
+                teamId: nextProjectId === 'project-2' ? 'team-2' : 'team-1',
+              }),
+            ),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        throw new Error(`Unexpected request: ${url.pathname}`);
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderBoard();
+    await screen.findByRole('heading', { name: '项目一' });
+    await user.type(screen.getByLabelText('任务标题'), '旧项目创建任务');
+    await user.click(screen.getByRole('button', { name: '创建任务' }));
+
+    await user.click(screen.getByRole('button', { name: '切换到项目二' }));
+    expect(await screen.findByRole('heading', { name: '项目二' })).toBeInTheDocument();
+    expect(screen.getByLabelText('任务标题')).toHaveValue('');
+    expect(screen.getByRole('button', { name: '创建任务' })).toBeEnabled();
+
+    await user.click(screen.getByRole('button', { name: '切换到项目一' }));
+    expect(await screen.findByRole('heading', { name: '项目一' })).toBeInTheDocument();
+    await user.type(screen.getByLabelText('任务标题'), '当前项目一新输入');
+
+    await act(async () => {
+      oldCreateResponse.resolve(
+        new Response(JSON.stringify(oldCreatedTask), {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    expect(screen.getByLabelText('任务标题')).toHaveValue('当前项目一新输入');
+    expect(screen.getByRole('button', { name: '创建任务' })).toBeEnabled();
+  });
+
+  it('keeps a new project editor active when an old project edit fails after an ABA transition', async () => {
+    const oldTask = createTask('task-old-edit', '旧项目编辑任务', 'todo');
+    const currentTask = createTask('task-current-edit', '当前项目编辑任务', 'todo');
+    const oldEditResponse = createDeferred<Response>();
+    let projectOneBoardRequests = 0;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input));
+        if (url.pathname === '/api/tasks/task-old-edit' && init?.method === 'PATCH') {
+          return oldEditResponse.promise;
+        }
+        if (url.pathname.endsWith('/task-activities') || url.pathname.endsWith('/members')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (url.pathname === '/api/projects/project-1/tasks') {
+          projectOneBoardRequests += 1;
+          return new Response(
+            JSON.stringify(
+              createBoard({
+                todo: [projectOneBoardRequests === 1 ? oldTask : currentTask],
+              }),
+            ),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        if (url.pathname === '/api/projects/project-2/tasks') {
+          return new Response(
+            JSON.stringify(
+              createBoard({}, {
+                projectId: 'project-2',
+                projectName: '项目二',
+                teamId: 'team-2',
+              }),
+            ),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        throw new Error(`Unexpected request: ${url.pathname}`);
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderBoard();
+    await screen.findByText(oldTask.title);
+    await user.click(
+      screen.getByRole('button', { name: `编辑详情：${oldTask.title}` }),
+    );
+    await user.click(screen.getByRole('button', { name: '保存修改' }));
+    await user.click(screen.getByRole('button', { name: '切换到项目二' }));
+    await screen.findByRole('heading', { name: '项目二' });
+    await user.click(screen.getByRole('button', { name: '切换到项目一' }));
+
+    expect(await screen.findByText(currentTask.title)).toBeInTheDocument();
+    expect(screen.queryByText(`编辑“${oldTask.title}”`)).not.toBeInTheDocument();
+    const currentEditButton = screen.getByRole('button', {
+      name: `编辑详情：${currentTask.title}`,
+    });
+    expect(currentEditButton).toBeEnabled();
+    await user.click(currentEditButton);
+    expect(screen.getByText(`编辑“${currentTask.title}”`)).toBeInTheDocument();
+
+    await act(async () => {
+      oldEditResponse.resolve(
+        new Response(JSON.stringify({ message: '旧项目编辑失败' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText(`编辑“${currentTask.title}”`)).toBeInTheDocument();
+    expect(screen.queryByText('旧项目编辑失败')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '保存修改' })).toBeEnabled();
+  });
+
+  it('keeps current AI generation state and drafts isolated from an old project generation', async () => {
+    const oldAiResponse = createDeferred<Response>();
+    const currentAiResponse = createDeferred<Response>();
+    const oldDraft = {
+      title: '旧项目 AI 草稿',
+      description: '',
+      priority: 'medium' as const,
+    };
+    const currentDraft = {
+      title: '当前项目 AI 草稿',
+      description: '',
+      priority: 'high' as const,
+    };
+    let aiRequestCount = 0;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith('/ai/task-drafts') && init?.method === 'POST') {
+          aiRequestCount += 1;
+          return aiRequestCount === 1 ? oldAiResponse.promise : currentAiResponse.promise;
+        }
+        if (url.pathname.endsWith('/task-activities') || url.pathname.endsWith('/members')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (url.pathname.endsWith('/tasks')) {
+          const isProjectTwo = url.pathname.includes('project-2');
+          return new Response(
+            JSON.stringify(
+              createBoard({}, {
+                projectId: isProjectTwo ? 'project-2' : 'project-1',
+                projectName: isProjectTwo ? '项目二' : '项目一',
+                teamId: isProjectTwo ? 'team-2' : 'team-1',
+              }),
+            ),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        throw new Error(`Unexpected request: ${url.pathname}`);
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderBoard();
+    await screen.findByRole('heading', { name: '项目一' });
+    await user.type(screen.getByLabelText('项目目标'), '旧项目需要生成一组任务草稿');
+    await user.click(screen.getByRole('button', { name: '生成任务草稿' }));
+    await user.click(screen.getByRole('button', { name: '切换到项目二' }));
+
+    await screen.findByRole('heading', { name: '项目二' });
+    expect(screen.getByLabelText('项目目标')).toHaveValue('');
+    expect(screen.getByRole('button', { name: '生成任务草稿' })).toBeEnabled();
+    await user.type(screen.getByLabelText('项目目标'), '当前项目需要生成新的任务草稿');
+    await user.click(screen.getByRole('button', { name: '生成任务草稿' }));
+
+    try {
+      await act(async () => {
+        oldAiResponse.resolve(
+          new Response(JSON.stringify([oldDraft]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        );
+        await Promise.resolve();
+      });
+
+      expect(screen.getByRole('button', { name: '生成中…' })).toBeDisabled();
+      expect(screen.queryByDisplayValue(oldDraft.title)).not.toBeInTheDocument();
+      expect(screen.getByLabelText('项目目标')).toHaveValue(
+        '当前项目需要生成新的任务草稿',
+      );
+
+      await act(async () => {
+        currentAiResponse.resolve(
+          new Response(JSON.stringify([currentDraft]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        );
+        await Promise.resolve();
+      });
+      expect(await screen.findByDisplayValue(currentDraft.title)).toBeInTheDocument();
+    } finally {
+      oldAiResponse.resolve(
+        new Response(JSON.stringify([oldDraft]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+      currentAiResponse.resolve(
+        new Response(JSON.stringify([currentDraft]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+    }
+  });
+
+  it('does not carry old move and archive busy or error state into another project', async () => {
+    const oldMoveTask = createTask('task-shared-move', '项目一移动任务', 'todo');
+    const currentMoveTask = createTask('task-shared-move', '项目二移动任务', 'todo');
+    const oldArchiveTask = createTask('task-shared-archive', '项目一归档任务', 'done');
+    const currentArchiveTask = createTask('task-shared-archive', '项目二归档任务', 'done');
+    const moveResponse = createDeferred<Response>();
+    const archiveResponse = createDeferred<Response>();
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input));
+        if (url.pathname === '/api/tasks/task-shared-move/status' && init?.method === 'PATCH') {
+          return moveResponse.promise;
+        }
+        if (url.pathname === '/api/tasks/task-shared-archive/archive' && init?.method === 'PATCH') {
+          return archiveResponse.promise;
+        }
+        if (url.pathname.endsWith('/task-activities') || url.pathname.endsWith('/members')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (url.pathname === '/api/projects/project-2/tasks') {
+          return new Response(
+            JSON.stringify(
+              createBoard(
+                { todo: [currentMoveTask], done: [currentArchiveTask] },
+                { projectId: 'project-2', projectName: '项目二', teamId: 'team-2' },
+              ),
+            ),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        if (url.pathname === '/api/projects/project-1/tasks') {
+          return new Response(
+            JSON.stringify(createBoard({ todo: [oldMoveTask], done: [oldArchiveTask] })),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        throw new Error(`Unexpected request: ${url.pathname}`);
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('confirm', vi.fn(() => true));
+    const user = userEvent.setup();
+
+    renderBoard();
+    await screen.findByText(oldMoveTask.title);
+    await user.click(
+      screen.getByRole('button', { name: `移动“${oldMoveTask.title}”到进行中` }),
+    );
+    await user.click(screen.getByRole('button', { name: '切换到项目二' }));
+
+    const currentMoveButton = await screen.findByRole('button', {
+      name: `移动“${currentMoveTask.title}”到进行中`,
+    });
+    expect(currentMoveButton).toBeEnabled();
+    await act(async () => {
+      moveResponse.resolve(
+        new Response(JSON.stringify({ message: '旧项目移动失败' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+      await Promise.resolve();
+    });
+    expect(screen.queryByText('旧项目移动失败')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '切换到项目一' }));
+    await user.click(await screen.findByRole('tab', { name: '已完成 1' }));
+    await user.click(
+      screen.getByRole('button', { name: `归档任务：${oldArchiveTask.title}` }),
+    );
+    await user.click(screen.getByRole('button', { name: '切换到项目二' }));
+    const currentArchiveButton = await screen.findByRole('button', {
+      name: `归档任务：${currentArchiveTask.title}`,
+    });
+    expect(currentArchiveButton).toBeEnabled();
+
+    await act(async () => {
+      archiveResponse.resolve(
+        new Response(JSON.stringify({ message: '旧项目归档失败' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+      await Promise.resolve();
+    });
+    expect(screen.queryByText('旧项目归档失败')).not.toBeInTheDocument();
+  });
+
+  it('serializes same-project moves and unlocks all move actions after the active request fails', async () => {
+    const firstTask = createTask('task-concurrent-move-a', '并发移动任务 A', 'todo');
+    const secondTask = createTask('task-concurrent-move-b', '并发移动任务 B', 'todo');
+    const firstMoveResponse = createDeferred<Response>();
+    const secondMoveResponse = createDeferred<Response>();
+    const movedSecondTask = { ...secondTask, status: 'in_progress' as const };
+    let firstMoveRequests = 0;
+    let secondMoveRequests = 0;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input));
+        if (url.pathname === '/api/tasks/task-concurrent-move-a/status' && init?.method === 'PATCH') {
+          firstMoveRequests += 1;
+          return firstMoveResponse.promise;
+        }
+        if (url.pathname === '/api/tasks/task-concurrent-move-b/status' && init?.method === 'PATCH') {
+          secondMoveRequests += 1;
+          return secondMoveResponse.promise;
+        }
+        if (url.pathname.endsWith('/task-activities') || url.pathname.endsWith('/members')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(
+          JSON.stringify(createBoard({ todo: [firstTask, secondTask] })),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderBoard();
+    await screen.findByText(firstTask.title);
+    const firstMoveButton = screen.getByRole('button', {
+      name: `移动“${firstTask.title}”到进行中`,
+    });
+    const secondMoveButton = screen.getByRole('button', {
+      name: `移动“${secondTask.title}”到进行中`,
+    });
+    await user.click(firstMoveButton);
+
+    expect(firstMoveRequests).toBe(1);
+    expect(firstMoveButton).toBeDisabled();
+    expect(secondMoveButton).toBeDisabled();
+    await user.click(secondMoveButton);
+    expect(secondMoveRequests).toBe(0);
+
+    await act(async () => {
+      firstMoveResponse.resolve(
+        new Response(JSON.stringify({ message: '较早移动失败' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('较早移动失败');
+    expect(firstMoveButton).toBeEnabled();
+    expect(secondMoveButton).toBeEnabled();
+
+    await user.click(secondMoveButton);
+    expect(secondMoveRequests).toBe(1);
+    expect(secondMoveButton).toBeDisabled();
+
+    await act(async () => {
+      secondMoveResponse.resolve(
+        new Response(JSON.stringify(movedSecondTask), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    await user.click(screen.getByRole('tab', { name: '进行中 1' }));
+    expect(screen.getByText(secondTask.title)).toBeInTheDocument();
+  });
+
+  it('serializes same-project archives and unlocks the next archive after the active request succeeds', async () => {
+    const firstTask = createTask('task-concurrent-archive-a', '并发归档任务 A', 'done');
+    const secondTask = createTask('task-concurrent-archive-b', '并发归档任务 B', 'done');
+    const firstArchiveResponse = createDeferred<Response>();
+    const secondArchiveResponse = createDeferred<Response>();
+    let firstArchiveRequests = 0;
+    let secondArchiveRequests = 0;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input));
+        if (url.pathname === '/api/tasks/task-concurrent-archive-a/archive' && init?.method === 'PATCH') {
+          firstArchiveRequests += 1;
+          return firstArchiveResponse.promise;
+        }
+        if (url.pathname === '/api/tasks/task-concurrent-archive-b/archive' && init?.method === 'PATCH') {
+          secondArchiveRequests += 1;
+          return secondArchiveResponse.promise;
+        }
+        if (url.pathname.endsWith('/task-activities') || url.pathname.endsWith('/members')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(
+          JSON.stringify(createBoard({ done: [firstTask, secondTask] })),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('confirm', vi.fn(() => true));
+    const user = userEvent.setup();
+
+    renderBoard();
+    await user.click(await screen.findByRole('tab', { name: '已完成 2' }));
+    const firstArchiveButton = screen.getByRole('button', {
+      name: `归档任务：${firstTask.title}`,
+    });
+    const secondArchiveButton = screen.getByRole('button', {
+      name: `归档任务：${secondTask.title}`,
+    });
+    await user.click(firstArchiveButton);
+
+    expect(firstArchiveRequests).toBe(1);
+    expect(firstArchiveButton).toBeDisabled();
+    expect(secondArchiveButton).toBeDisabled();
+    await user.click(secondArchiveButton);
+    expect(secondArchiveRequests).toBe(0);
+
+    await act(async () => {
+      firstArchiveResponse.resolve(
+        new Response(JSON.stringify({ ...firstTask, archivedAt: createdAt }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText(firstTask.title)).not.toBeInTheDocument();
+    expect(secondArchiveButton).toBeEnabled();
+
+    await user.click(secondArchiveButton);
+    expect(secondArchiveRequests).toBe(1);
+    expect(secondArchiveButton).toBeDisabled();
+
+    await act(async () => {
+      secondArchiveResponse.resolve(
+        new Response(JSON.stringify({ message: '当前归档失败' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('当前归档失败');
+    expect(secondArchiveButton).toBeEnabled();
   });
 
   it('does not send an update request when task detail editing is cancelled', async () => {
