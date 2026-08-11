@@ -14,6 +14,7 @@ import {
   MoreThanOrEqual,
   Not,
   type FindOptionsWhere,
+  type QueryDeepPartialEntity,
 } from 'typeorm';
 import { Project } from '../database/entities/project.entity';
 import {
@@ -450,8 +451,22 @@ export class TasksService {
       }
 
       const previousStatus = task.status;
-      task.status = status;
-      const savedTask = await taskRepository.save(task);
+      const transition = await taskRepository.update(
+        { id: taskId, archivedAt: IsNull() },
+        { status },
+      );
+      if (transition.affected !== 1) {
+        throw new ConflictException('Archived tasks cannot be modified');
+      }
+
+      const savedTask = await taskRepository.findOne({
+        where: { id: taskId },
+        relations: { project: { team: true }, assignee: true },
+      });
+      if (!savedTask) {
+        throw new NotFoundException('Task does not exist');
+      }
+
       await this.recordActivity(entityManager, {
         task: savedTask,
         actorId: userId,
@@ -482,6 +497,7 @@ export class TasksService {
       if (task.archivedAt) {
         throw new ConflictException('Archived tasks cannot be modified');
       }
+      const changes: QueryDeepPartialEntity<Task> = {};
       const fields: Record<
         string,
         { from: string | null; to: string | null }
@@ -490,19 +506,19 @@ export class TasksService {
         const title = input.title.trim();
         if (task.title !== title) {
           fields.title = { from: task.title, to: title };
-          task.title = title;
+          changes.title = title;
         }
       }
       if (input.description !== undefined) {
         const description = input.description.trim();
         if (task.description !== description) {
           fields.description = { from: task.description, to: description };
-          task.description = description;
+          changes.description = description;
         }
       }
       if (input.priority !== undefined && task.priority !== input.priority) {
         fields.priority = { from: task.priority, to: input.priority };
-        task.priority = input.priority;
+        changes.priority = input.priority;
       }
       if (input.dueDate !== undefined) {
         const dueDate = input.dueDate ? normalizeUtcDate(input.dueDate) : null;
@@ -510,7 +526,7 @@ export class TasksService {
         const nextDueDate = this.toActivityDate(dueDate);
         if (previousDueDate !== nextDueDate) {
           fields.dueDate = { from: previousDueDate, to: nextDueDate };
-          task.dueDate = dueDate;
+          changes.dueDate = dueDate;
         }
       }
 
@@ -532,7 +548,7 @@ export class TasksService {
             fromDisplayName: task.assignee?.displayName ?? null,
             toDisplayName: assignee?.displayName ?? null,
           };
-          task.assignee = assignee;
+          changes.assignee = assignee ? { id: assignee.id } : null;
         }
       }
 
@@ -540,7 +556,22 @@ export class TasksService {
         return this.toTaskSummary(task);
       }
 
-      const savedTask = await taskRepository.save(task);
+      const transition = await taskRepository.update(
+        { id: taskId, archivedAt: IsNull() },
+        changes,
+      );
+      if (transition.affected !== 1) {
+        throw new ConflictException('Archived tasks cannot be modified');
+      }
+
+      const savedTask = await taskRepository.findOne({
+        where: { id: taskId },
+        relations: { project: { team: true }, assignee: true },
+      });
+      if (!savedTask) {
+        throw new NotFoundException('Task does not exist');
+      }
+
       if (Object.keys(fields).length > 0) {
         await this.recordActivity(entityManager, {
           task: savedTask,

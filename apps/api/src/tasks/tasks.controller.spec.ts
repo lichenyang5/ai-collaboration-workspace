@@ -36,9 +36,25 @@ describe('Task creation', () => {
         },
       ]),
     };
+    const taskState: Partial<Task> = {};
     const taskRepository = {
       create: jest.fn((value: object) => ({ id: 'task-1', ...value })),
       save: jest.fn(async (value: object) => value),
+      update: jest.fn(
+        async (
+          _criteria: object,
+          changes: Partial<Omit<Task, 'assignee'>> & {
+            assignee?: User | null | (() => string);
+          },
+        ) => {
+          const { assignee, ...scalarChanges } = changes;
+          Object.assign(taskState, scalarChanges);
+          if (Object.prototype.hasOwnProperty.call(changes, 'assignee')) {
+            taskState.assignee = typeof assignee === 'function' ? null : assignee;
+          }
+          return { affected: 1 };
+        },
+      ),
       findOne: jest.fn(
         async (options: { relations?: { assignee?: boolean } }) => ({
           id: 'task-1',
@@ -58,6 +74,7 @@ describe('Task creation', () => {
                 passwordHash: 'must-not-be-exposed',
               }
             : null,
+          ...taskState,
         }),
       ),
       find: jest.fn(async () => [
@@ -465,12 +482,19 @@ describe('Task activities', () => {
       update: jest.fn(
         async (
           _criteria: object,
-          changes: { archivedAt?: Date | null },
+          changes: Partial<Task>,
         ) => {
-          if (!Object.prototype.hasOwnProperty.call(changes, 'archivedAt')) {
-            return { affected: 0 };
+          const { assignee, ...scalarChanges } = changes;
+          Object.assign(task, scalarChanges);
+          if (Object.prototype.hasOwnProperty.call(changes, 'assignee')) {
+            const assigneeId = (assignee as { id?: string } | null)?.id;
+            task.assignee =
+              assigneeId === nextAssigneeId
+                ? (nextAssignee as User)
+                : assigneeId === previousAssigneeId
+                  ? (previousAssignee as User)
+                  : null;
           }
-          task.archivedAt = changes.archivedAt ?? null;
           return { affected: 1 };
         },
       ),
