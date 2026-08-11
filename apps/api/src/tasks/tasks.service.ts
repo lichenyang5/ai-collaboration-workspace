@@ -4,7 +4,16 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import {
+  Between,
+  DataSource,
+  ILike,
+  IsNull,
+  LessThan,
+  MoreThan,
+  Not,
+  type FindOptionsWhere,
+} from 'typeorm';
 import { Project } from '../database/entities/project.entity';
 import {
   Task,
@@ -16,6 +25,8 @@ import { User } from '../database/entities/user.entity';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
 import { CreateTaskBatchDto } from './dto/create-task-batch.dto';
+import { TaskBoardQueryDto } from './dto/task-board-query.dto';
+import { normalizeUtcDate } from './task-date';
 
 export interface TaskAssigneeSummary {
   id: string;
@@ -60,7 +71,7 @@ export class TasksService {
       description: input.description?.trim() ?? '',
       priority: input.priority ?? TaskPriority.Medium,
       status: TaskStatus.Todo,
-      dueDate: input.dueDate ? new Date(input.dueDate) : null,
+      dueDate: input.dueDate ? normalizeUtcDate(input.dueDate) : null,
       project,
       assignee,
     });
@@ -101,6 +112,7 @@ export class TasksService {
   async getTaskBoard(
     projectId: string,
     userId: string,
+    query: TaskBoardQueryDto,
   ): Promise<{
     projectId: string;
     projectName: string;
@@ -109,8 +121,78 @@ export class TasksService {
   }> {
     const project = await this.getAccessibleProject(projectId, userId);
     const taskRepository = this.dataSource.getRepository(Task);
+    const view = query.view ?? 'active';
+    const baseWhere: FindOptionsWhere<Task> = {
+      project: { id: projectId },
+      archivedAt: view === 'archived' ? Not(IsNull()) : IsNull(),
+      ...(query.priority ? { priority: query.priority } : {}),
+    };
+    let assigneeWhere: FindOptionsWhere<Task> = {};
+    if (query.assigneeId === 'unassigned') {
+      assigneeWhere = { assignee: IsNull() };
+    } else if (query.assigneeId) {
+      const assignee = await this.getTeamMemberUser(
+        query.assigneeId,
+        project.team.id,
+      );
+      assigneeWhere = { assignee: { id: assignee.id } };
+    }
+
+    const today = normalizeUtcDate(new Date().toISOString().slice(0, 10));
+    const dueSoonEnd = new Date(today);
+    dueSoonEnd.setUTCDate(today.getUTCDate() + 3);
+    const dueWhere: FindOptionsWhere<Task>[] = [];
+    const withBoardFilters = (condition: FindOptionsWhere<Task> = {}) => ({
+      ...baseWhere,
+      ...assigneeWhere,
+      ...condition,
+    });
+
+    switch (query.due) {
+      case 'unset':
+        dueWhere.push(withBoardFilters({ dueDate: IsNull() }));
+        break;
+      case 'overdue':
+        dueWhere.push(
+          withBoardFilters({
+            status: Not(TaskStatus.Done),
+            dueDate: LessThan(today),
+          }),
+        );
+        break;
+      case 'due_soon':
+        dueWhere.push(
+          withBoardFilters({
+            status: Not(TaskStatus.Done),
+            dueDate: Between(today, dueSoonEnd),
+          }),
+        );
+        break;
+      case 'normal':
+        dueWhere.push(
+          withBoardFilters({
+            status: TaskStatus.Done,
+            dueDate: Not(IsNull()),
+          }),
+          withBoardFilters({
+            status: Not(TaskStatus.Done),
+            dueDate: MoreThan(dueSoonEnd),
+          }),
+        );
+        break;
+      default:
+        dueWhere.push(withBoardFilters());
+    }
+
+    const keyword = query.q?.trim();
+    const where = keyword
+      ? dueWhere.flatMap((condition) => [
+          { ...condition, title: ILike(`%${keyword}%`) },
+          { ...condition, description: ILike(`%${keyword}%`) },
+        ])
+      : dueWhere;
     const tasks = await taskRepository.find({
-      where: { project: { id: projectId } },
+      where,
       relations: { assignee: true },
       order: { createdAt: 'ASC' },
     });
@@ -197,7 +279,7 @@ export class TasksService {
       task.priority = input.priority;
     }
     if (Object.prototype.hasOwnProperty.call(input, 'dueDate')) {
-      task.dueDate = input.dueDate ? new Date(input.dueDate) : null;
+      task.dueDate = input.dueDate ? normalizeUtcDate(input.dueDate) : null;
     }
     if (Object.prototype.hasOwnProperty.call(input, 'assigneeId')) {
       task.assignee = input.assigneeId

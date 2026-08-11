@@ -5,6 +5,7 @@ import {
   IsString,
   IsUUID,
   Length,
+  Matches,
   MaxLength,
 } from 'class-validator';
 import { TaskPriority } from '../../database/entities/task.entity';
@@ -26,6 +27,7 @@ export class UpdateTaskDto {
 
   @IsOptional()
   @IsDateString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
   dueDate?: string | null;
 
   @IsOptional()

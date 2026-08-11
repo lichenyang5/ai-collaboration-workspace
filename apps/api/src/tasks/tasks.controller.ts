@@ -5,6 +5,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
   ValidationPipe,
 } from '@nestjs/common';
@@ -17,6 +18,7 @@ import { CreateTaskDto } from './dto/create-task.dto';
 import { UpdateTaskStatusDto } from './dto/update-task-status.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
 import { CreateTaskBatchDto } from './dto/create-task-batch.dto';
+import { TaskBoardQueryDto } from './dto/task-board-query.dto';
 import { TasksService } from './tasks.service';
 
 @Controller()
@@ -47,9 +49,11 @@ export class TasksController {
   @Get('projects/:projectId/tasks')
   getTaskBoard(
     @Param('projectId') projectId: string,
+    @Query(new ValidationPipe({ whitelist: true, transform: true }))
+    query: TaskBoardQueryDto,
     @CurrentUser() user: CurrentUserPayload,
   ) {
-    return this.tasksService.getTaskBoard(projectId, user.id);
+    return this.tasksService.getTaskBoard(projectId, user.id, query);
   }
 
   @Patch('tasks/:taskId/status')

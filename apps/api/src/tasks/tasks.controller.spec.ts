@@ -14,6 +14,7 @@ import {
 import { TeamMember } from '../database/entities/team-member.entity';
 import { User } from '../database/entities/user.entity';
 import { SiliconFlowTaskPlanningService } from '../ai/siliconflow-task-planning.service';
+import { TasksService } from './tasks.service';
 
 process.env.JWT_SECRET = 'test-secret';
 
@@ -173,6 +174,67 @@ describe('Task creation', () => {
         done: [{ id: 'task-done' }],
       },
     });
+  });
+
+  it('validates and forwards all task board filters to the service', async () => {
+    const getTaskBoardSpy = jest
+      .spyOn(app.get(TasksService), 'getTaskBoard')
+      .mockResolvedValue({
+        projectId: 'project-1',
+        projectName: '浠诲姟鍗忎綔骞冲彴',
+        teamId: 'team-1',
+        columns: { todo: [], in_progress: [], done: [] },
+      });
+    const token = new JwtService({ secret: 'test-secret' }).sign({
+      sub: 'user-1',
+    });
+
+    const response = await request(app.getHttpServer())
+      .get('/api/projects/project-1/tasks')
+      .query({
+        q: '鎺ュ彛',
+        assigneeId: memberId,
+        priority: TaskPriority.High,
+        due: 'overdue',
+        view: 'active',
+      })
+      .set('Cookie', `access_token=${token}`);
+
+    expect(response.status).toBe(200);
+    expect(getTaskBoardSpy).toHaveBeenCalledWith('project-1', 'user-1', {
+      q: '鎺ュ彛',
+      assigneeId: memberId,
+      priority: TaskPriority.High,
+      due: 'overdue',
+      view: 'active',
+    });
+    getTaskBoardSpy.mockRestore();
+  });
+
+  it('rejects an unsupported task board due filter', async () => {
+    const token = new JwtService({ secret: 'test-secret' }).sign({
+      sub: 'user-1',
+    });
+
+    const response = await request(app.getHttpServer())
+      .get('/api/projects/project-1/tasks')
+      .query({ due: 'tomorrow' })
+      .set('Cookie', `access_token=${token}`);
+
+    expect(response.status).toBe(400);
+  });
+
+  it('rejects a malformed task board assigneeId filter', async () => {
+    const token = new JwtService({ secret: 'test-secret' }).sign({
+      sub: 'user-1',
+    });
+
+    const response = await request(app.getHttpServer())
+      .get('/api/projects/project-1/tasks')
+      .query({ assigneeId: 'not-a-uuid' })
+      .set('Cookie', `access_token=${token}`);
+
+    expect(response.status).toBe(400);
   });
 
   it('assigns a task only to a team member and returns a safe assignee summary', async () => {
