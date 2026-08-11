@@ -818,6 +818,183 @@ describe('TaskBoardPage', () => {
     expect(screen.queryByText('已废弃高优先级响应')).not.toBeInTheDocument();
   });
 
+  it('reloads a priority-filtered board after create instead of locally adding a nonmatching task', async () => {
+    const existingTask = {
+      ...createTask('task-filtered-create-existing', '现有高优先级任务', 'todo'),
+      priority: 'high' as const,
+    };
+    const createdTask = createTask(
+      'task-filtered-create-medium',
+      '不应留在高优先级筛选中的任务',
+      'todo',
+    );
+    let boardRequests = 0;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith('/task-activities') || url.pathname.endsWith('/members')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (url.pathname === '/api/projects/project-1/tasks' && init?.method === 'POST') {
+          return new Response(JSON.stringify(createdTask), {
+            status: 201,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (url.pathname === '/api/projects/project-1/tasks') {
+          boardRequests += 1;
+          expect(url.searchParams.get('priority')).toBe('high');
+          return new Response(
+            JSON.stringify(createBoard({ todo: [existingTask] })),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        throw new Error(`Unexpected request: ${url.pathname}`);
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderBoard('/projects/project-1/board?priority=high');
+    await screen.findByText(existingTask.title);
+    await user.type(screen.getByLabelText('任务标题'), createdTask.title);
+    await user.click(screen.getByRole('button', { name: '创建任务' }));
+
+    await waitFor(() => {
+      expect(boardRequests).toBe(2);
+    });
+    expect(screen.getByText(existingTask.title)).toBeInTheDocument();
+    expect(screen.queryByText(createdTask.title)).not.toBeInTheDocument();
+  });
+
+  it('reloads a keyword-filtered board after edit instead of keeping the renamed nonmatching task', async () => {
+    const originalTask = createTask(
+      'task-filtered-edit',
+      'keep 原始标题',
+      'todo',
+    );
+    const updatedTask = {
+      ...originalTask,
+      title: '已移出关键词结果',
+    };
+    const remainingTask = createTask(
+      'task-filtered-edit-remaining',
+      'keep 保留结果',
+      'todo',
+    );
+    let boardRequests = 0;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input));
+        if (url.pathname === '/api/tasks/task-filtered-edit' && init?.method === 'PATCH') {
+          return new Response(JSON.stringify(updatedTask), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (url.pathname.endsWith('/task-activities') || url.pathname.endsWith('/members')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (url.pathname === '/api/projects/project-1/tasks') {
+          boardRequests += 1;
+          expect(url.searchParams.get('q')).toBe('keep');
+          return new Response(
+            JSON.stringify(
+              createBoard({
+                todo: [boardRequests === 1 ? originalTask : remainingTask],
+              }),
+            ),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        throw new Error(`Unexpected request: ${url.pathname}`);
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderBoard('/projects/project-1/board?q=keep');
+    await screen.findByText(originalTask.title);
+    await user.click(
+      screen.getByRole('button', { name: `编辑详情：${originalTask.title}` }),
+    );
+    const titleInput = screen.getByLabelText('编辑任务标题');
+    await user.clear(titleInput);
+    await user.type(titleInput, updatedTask.title);
+    await user.click(screen.getByRole('button', { name: '保存修改' }));
+
+    await waitFor(() => {
+      expect(boardRequests).toBe(2);
+    });
+    expect(await screen.findByText(remainingTask.title)).toBeInTheDocument();
+    expect(screen.queryByText(updatedTask.title)).not.toBeInTheDocument();
+  });
+
+  it('reloads a keyword-filtered board after archive instead of treating a local removal as authoritative', async () => {
+    const archivedTask = createTask(
+      'task-filtered-archive',
+      'keep 待归档任务',
+      'done',
+    );
+    const remainingTask = createTask(
+      'task-filtered-archive-remaining',
+      'keep 服务端保留任务',
+      'done',
+    );
+    let boardRequests = 0;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input));
+        if (url.pathname === '/api/tasks/task-filtered-archive/archive' && init?.method === 'PATCH') {
+          return new Response(
+            JSON.stringify({ ...archivedTask, archivedAt: createdAt }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        if (url.pathname.endsWith('/task-activities') || url.pathname.endsWith('/members')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (url.pathname === '/api/projects/project-1/tasks') {
+          boardRequests += 1;
+          expect(url.searchParams.get('q')).toBe('keep');
+          return new Response(
+            JSON.stringify(
+              createBoard({
+                done: [boardRequests === 1 ? archivedTask : remainingTask],
+              }),
+            ),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        throw new Error(`Unexpected request: ${url.pathname}`);
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('confirm', vi.fn(() => true));
+    const user = userEvent.setup();
+
+    renderBoard('/projects/project-1/board?q=keep');
+    await user.click(await screen.findByRole('tab', { name: '已完成 1' }));
+    await user.click(
+      screen.getByRole('button', { name: `归档任务：${archivedTask.title}` }),
+    );
+
+    await waitFor(() => {
+      expect(boardRequests).toBe(2);
+    });
+    expect(await screen.findByText(remainingTask.title)).toBeInTheDocument();
+    expect(screen.queryByText(archivedTask.title)).not.toBeInTheDocument();
+  });
+
   it('reloads the current board when a mutation spans a project ABA hidden by keyword debounce', async () => {
     const originalTask = createTask('task-debounce-aba', 'ABA 前任务', 'todo');
     const movedTask = { ...originalTask, status: 'in_progress' as const };

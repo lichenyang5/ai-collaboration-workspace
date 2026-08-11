@@ -256,6 +256,12 @@ export function TaskBoardPage() {
     () => toBoardQuery(boardFilters),
     [boardFilters],
   );
+  const hasActiveBoardFilters = Boolean(
+    boardFilters.q ||
+      boardFilters.assigneeId ||
+      boardFilters.priority ||
+      boardFilters.due,
+  );
   const isKeywordDebouncing = filters.q !== debouncedQuery;
   if (
     !isKeywordDebouncing &&
@@ -524,6 +530,7 @@ export function TaskBoardPage() {
       currentContext.projectId === mutationContext.projectId &&
       mutationContext.projectOperationGeneration ===
         projectOperationContext.current.generation &&
+      !hasActiveBoardFilters &&
       hasCompatibleSnapshot
     ) {
       updateCurrentView();
