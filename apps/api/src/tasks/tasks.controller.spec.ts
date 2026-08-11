@@ -394,6 +394,13 @@ describe('Task activities', () => {
   let app: INestApplication;
   let transaction: jest.Mock;
   let task: Task;
+  let globalTaskRepository: {
+    create: jest.Mock;
+    save: jest.Mock;
+    findOne: jest.Mock;
+    find: jest.Mock;
+  };
+  let transactionTaskRepository: typeof globalTaskRepository;
   let activityRepository: {
     create: jest.Mock;
     save: jest.Mock;
@@ -447,7 +454,7 @@ describe('Task activities', () => {
       assignee: previousAssignee,
     } as Task;
     let createdTaskCount = 0;
-    const taskRepository = {
+    const createTaskRepository = () => ({
       create: jest.fn((value: object) => ({
         id: `created-task-${++createdTaskCount}`,
         createdAt: new Date('2026-08-11T00:00:00.000Z'),
@@ -457,7 +464,9 @@ describe('Task activities', () => {
       save: jest.fn(async (value: object | object[]) => value),
       findOne: jest.fn(async () => task),
       find: jest.fn(async () => []),
-    };
+    });
+    globalTaskRepository = createTaskRepository();
+    transactionTaskRepository = createTaskRepository();
     const projectRepository = {
       findOne: jest.fn(async () => project),
     };
@@ -506,6 +515,7 @@ describe('Task activities', () => {
     };
     const repositoryFor = (
       entity: unknown,
+      taskRepository: typeof globalTaskRepository,
       taskActivityRepository: typeof activityRepository,
     ) => {
       if (entity === Task) {
@@ -523,10 +533,10 @@ describe('Task activities', () => {
       throw new Error('Unexpected repository');
     };
     const getRepository = jest.fn((entity: unknown) =>
-      repositoryFor(entity, activityListRepository),
+      repositoryFor(entity, globalTaskRepository, activityListRepository),
     );
     const transactionGetRepository = jest.fn((entity: unknown) =>
-      repositoryFor(entity, activityRepository),
+      repositoryFor(entity, transactionTaskRepository, activityRepository),
     );
     transaction = jest.fn(
       async (
@@ -710,6 +720,13 @@ describe('Task activities', () => {
         task: expect.objectContaining({ id: 'task-activity-1' }),
       }),
     );
+    expect(transactionTaskRepository.findOne).toHaveBeenCalledWith({
+      where: { id: 'task-activity-1' },
+      relations: { project: { team: true }, assignee: true },
+    });
+    expect(transactionTaskRepository.save).toHaveBeenCalledWith(task);
+    expect(globalTaskRepository.findOne).not.toHaveBeenCalled();
+    expect(globalTaskRepository.save).not.toHaveBeenCalled();
     expect(transaction).toHaveBeenCalledTimes(1);
   });
 
@@ -730,6 +747,13 @@ describe('Task activities', () => {
         task: expect.objectContaining({ id: 'task-activity-1' }),
       }),
     );
+    expect(transactionTaskRepository.findOne).toHaveBeenCalledWith({
+      where: { id: 'task-activity-1' },
+      relations: { project: { team: true }, assignee: true },
+    });
+    expect(transactionTaskRepository.save).toHaveBeenCalledWith(task);
+    expect(globalTaskRepository.findOne).not.toHaveBeenCalled();
+    expect(globalTaskRepository.save).not.toHaveBeenCalled();
     expect(transaction).toHaveBeenCalledTimes(1);
   });
 

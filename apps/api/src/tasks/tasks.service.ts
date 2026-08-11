@@ -46,7 +46,7 @@ export interface TaskSummary {
   status: TaskStatus;
   priority: TaskPriority;
   dueDate: Date | null;
-  archivedAt: Date | null;
+  archivedAt: string | null;
   createdAt: Date;
   updatedAt: Date;
   assignee: TaskAssigneeSummary | null;
@@ -613,7 +613,7 @@ export class TasksService {
       status: task.status,
       priority: task.priority,
       dueDate: task.dueDate,
-      archivedAt: task.archivedAt,
+      archivedAt: task.archivedAt?.toISOString() ?? null,
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
       assignee: task.assignee
