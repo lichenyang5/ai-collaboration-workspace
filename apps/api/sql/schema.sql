@@ -46,12 +46,30 @@ CREATE TABLE IF NOT EXISTS tasks (
   project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   assignee_id UUID REFERENCES users(id) ON DELETE SET NULL,
   due_date TIMESTAMPTZ,
+  archived_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS task_activities (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  actor_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  event_type VARCHAR(32) NOT NULL CHECK (event_type IN (
+    'created', 'updated', 'status_changed', 'assignee_changed', 'archived', 'restored'
+  )),
+  details JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS teams_created_by_index ON teams (created_by_id);
 CREATE INDEX IF NOT EXISTS team_members_user_index ON team_members (user_id);
 CREATE INDEX IF NOT EXISTS projects_team_index ON projects (team_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS tasks_project_status_index ON tasks (project_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS tasks_project_archived_status_index
+  ON tasks (project_id, archived_at, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS tasks_assignee_index ON tasks (assignee_id);
+CREATE INDEX IF NOT EXISTS task_activities_task_created_index
+  ON task_activities (task_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS task_activities_created_index
+  ON task_activities (created_at DESC);

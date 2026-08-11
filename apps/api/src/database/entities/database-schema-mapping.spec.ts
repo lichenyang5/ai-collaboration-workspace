@@ -1,6 +1,7 @@
 import { getMetadataArgsStorage } from 'typeorm';
 import { Project } from './project.entity';
 import { Task } from './task.entity';
+import { TaskActivity } from './task-activity.entity';
 import { TeamMember } from './team-member.entity';
 import { Team } from './team.entity';
 import { User } from './user.entity';
@@ -26,5 +27,9 @@ describe('PostgreSQL schema mappings', () => {
     expect(joinColumnName(Project, 'team')).toBe('team_id');
     expect(joinColumnName(Task, 'project')).toBe('project_id');
     expect(joinColumnName(Task, 'assignee')).toBe('assignee_id');
+    expect(columnName(Task, 'archivedAt')).toBe('archived_at');
+    expect(joinColumnName(TaskActivity, 'task')).toBe('task_id');
+    expect(joinColumnName(TaskActivity, 'actor')).toBe('actor_id');
+    expect(columnName(TaskActivity, 'eventType')).toBe('event_type');
   });
 });

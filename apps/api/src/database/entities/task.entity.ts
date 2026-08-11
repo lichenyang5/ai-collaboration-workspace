@@ -4,11 +4,13 @@ import {
   Entity,
   JoinColumn,
   ManyToOne,
+  OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
 import { Project } from './project.entity';
 import { User } from './user.entity';
+import { TaskActivity } from './task-activity.entity';
 
 export enum TaskStatus {
   Todo = 'todo',
@@ -52,6 +54,12 @@ export class Task {
 
   @Column({ name: 'due_date', type: 'timestamptz', nullable: true })
   dueDate!: Date | null;
+
+  @Column({ name: 'archived_at', type: 'timestamptz', nullable: true })
+  archivedAt!: Date | null;
+
+  @OneToMany(() => TaskActivity, (activity) => activity.task)
+  activities!: TaskActivity[];
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;

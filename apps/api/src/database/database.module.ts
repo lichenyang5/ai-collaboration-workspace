@@ -4,11 +4,12 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { Project } from './entities/project.entity';
 import { Task } from './entities/task.entity';
+import { TaskActivity } from './entities/task-activity.entity';
 import { TeamMember } from './entities/team-member.entity';
 import { Team } from './entities/team.entity';
 import { User } from './entities/user.entity';
 
-const entities = [User, Team, TeamMember, Project, Task];
+const entities = [User, Team, TeamMember, Project, Task, TaskActivity];
 const databaseImports: NonNullable<ModuleMetadata['imports']> = [
   ConfigModule.forRoot({ isGlobal: true }),
 ];

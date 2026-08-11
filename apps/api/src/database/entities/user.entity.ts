@@ -7,6 +7,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { Task } from './task.entity';
+import { TaskActivity } from './task-activity.entity';
 import { TeamMember } from './team-member.entity';
 import { Team } from './team.entity';
 
@@ -32,6 +33,9 @@ export class User {
 
   @OneToMany(() => Task, (task) => task.assignee)
   assignedTasks!: Task[];
+
+  @OneToMany(() => TaskActivity, (activity) => activity.actor)
+  taskActivities!: TaskActivity[];
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
