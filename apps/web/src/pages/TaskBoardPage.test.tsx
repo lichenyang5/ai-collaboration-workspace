@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { TaskBoardPage } from './TaskBoardPage';
 import type { TaskBoardResponse, TaskSummary } from '../types/workspace';
 
@@ -40,12 +40,27 @@ function createBoard(
   };
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+
+  return { promise, resolve };
+}
+
+function LocationProbe() {
+  const location = useLocation();
+  return <output data-testid="board-location">{location.pathname}{location.search}</output>;
+}
+
 function renderBoard(entry = '/projects/project-1/board') {
   return render(
     <MemoryRouter initialEntries={[entry]}>
       <Routes>
         <Route path="/projects/:projectId/board" element={<TaskBoardPage />} />
       </Routes>
+      <LocationProbe />
     </MemoryRouter>,
   );
 }
@@ -165,6 +180,36 @@ describe('TaskBoardPage', () => {
     expect(boardUrl.searchParams.get('due')).toBe('overdue');
   });
 
+  it('removes empty and unsupported filter parameters from the initial URL while preserving a supported view', async () => {
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL) => {
+        if (String(input).includes('/api/teams/team-1/members')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+
+        return new Response(JSON.stringify(createBoard()), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderBoard(
+      '/projects/project-1/board?q=%20%20&priority=urgent&due=tomorrow&view=archived&assigneeId=not-a-uuid',
+    );
+
+    await screen.findByRole('heading', { name: '任务协作平台' });
+    await waitFor(() => {
+      expect(screen.getByTestId('board-location')).toHaveTextContent(
+        '/projects/project-1/board?view=archived',
+      );
+    });
+  });
+
   it('debounces a keyword filter for 250 ms before issuing one new board request', async () => {
     const board = createBoard({
       todo: [createTask('task-debounced', '初始任务', 'todo')],
@@ -212,6 +257,56 @@ describe('TaskBoardPage', () => {
     expect(
       new URL(String(boardRequests()[1]?.[0])).searchParams.get('q'),
     ).toBe('新的关键词');
+  });
+
+  it('waits for a pending keyword debounce before requesting a changed priority filter', async () => {
+    const board = createBoard({
+      todo: [createTask('task-filter-race', '筛选竞态任务', 'todo')],
+    });
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL) => {
+        if (String(input).includes('/api/teams/team-1/members')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+
+        return new Response(JSON.stringify(board), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderBoard();
+    await screen.findByText('筛选竞态任务');
+    vi.useFakeTimers();
+
+    const boardRequests = () =>
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).includes('/api/projects/project-1/tasks'),
+      );
+    expect(boardRequests()).toHaveLength(1);
+
+    fireEvent.change(screen.getByLabelText('关键词'), {
+      target: { value: '新关键词' },
+    });
+    fireEvent.change(screen.getByLabelText('筛选优先级'), {
+      target: { value: 'high' },
+    });
+
+    expect(boardRequests()).toHaveLength(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(250);
+    });
+
+    expect(boardRequests()).toHaveLength(2);
+    const finalRequest = new URL(String(boardRequests()[1]?.[0]));
+    expect(finalRequest.searchParams.get('q')).toBe('新关键词');
+    expect(finalRequest.searchParams.get('priority')).toBe('high');
   });
 
   it('keeps the last successful board visible when filtering fails and retries it on request', async () => {
@@ -452,6 +547,146 @@ describe('TaskBoardPage', () => {
         }),
       }),
     );
+  });
+
+  it('disables every card edit and move action while saving an edit is pending', async () => {
+    const firstTask = createTask('task-save-1', '第一个待办任务', 'todo');
+    const secondTask = createTask('task-save-2', '第二个待办任务', 'todo');
+    const saveResponse = createDeferred<Response>();
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith('/api/tasks/task-save-1') && init?.method === 'PATCH') {
+          return saveResponse.promise;
+        }
+        if (url.endsWith('/api/teams/team-1/members')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+
+        return new Response(
+          JSON.stringify(createBoard({ todo: [firstTask, secondTask] })),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        );
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderBoard();
+    await screen.findByText('第一个待办任务');
+    await user.click(
+      screen.getByRole('button', { name: '编辑详情：第一个待办任务' }),
+    );
+    await user.click(screen.getByRole('button', { name: '保存修改' }));
+
+    try {
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: '保存中…' })).toBeDisabled();
+      });
+      expect(
+        screen.getByRole('button', { name: '编辑详情：第一个待办任务' }),
+      ).toBeDisabled();
+      expect(
+        screen.getByRole('button', { name: '移动“第一个待办任务”到进行中' }),
+      ).toBeDisabled();
+      expect(
+        screen.getByRole('button', { name: '编辑详情：第二个待办任务' }),
+      ).toBeDisabled();
+      expect(
+        screen.getByRole('button', { name: '移动“第二个待办任务”到进行中' }),
+      ).toBeDisabled();
+    } finally {
+      await act(async () => {
+        saveResponse.resolve(
+          new Response(JSON.stringify(firstTask), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        );
+        await Promise.resolve();
+      });
+    }
+  });
+
+  it('does not let a stale filter response overwrite a successful task mutation', async () => {
+    const originalTask = createTask('task-stale-board', '不会被旧快照覆盖', 'todo');
+    const movedTask = { ...originalTask, status: 'in_progress' as const };
+    const staleBoardResponse = createDeferred<Response>();
+    let boardRequestCount = 0;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith('/api/teams/team-1/members')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (
+          url.endsWith('/api/tasks/task-stale-board/status') &&
+          init?.method === 'PATCH'
+        ) {
+          return new Response(JSON.stringify(movedTask), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+
+        boardRequestCount += 1;
+        if (boardRequestCount === 2) {
+          return staleBoardResponse.promise;
+        }
+
+        return new Response(
+          JSON.stringify(createBoard({ todo: [originalTask] })),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderBoard();
+    await screen.findByText('不会被旧快照覆盖');
+    fireEvent.change(screen.getByLabelText('筛选优先级'), {
+      target: { value: 'high' },
+    });
+    await waitFor(() => {
+      expect(boardRequestCount).toBe(2);
+    });
+
+    await user.click(
+      screen.getByRole('button', { name: '移动“不会被旧快照覆盖”到进行中' }),
+    );
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: '进行中 1' })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole('tab', { name: '进行中 1' }));
+    expect(
+      screen.getByRole('tabpanel', { name: /进行中/ }),
+    ).toHaveTextContent('不会被旧快照覆盖');
+
+    await act(async () => {
+      staleBoardResponse.resolve(
+        new Response(JSON.stringify(createBoard({ todo: [originalTask] })), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('tabpanel', { name: /进行中/ }),
+      ).toHaveTextContent('不会被旧快照覆盖');
+    });
   });
 
   it('does not send an update request when task detail editing is cancelled', async () => {

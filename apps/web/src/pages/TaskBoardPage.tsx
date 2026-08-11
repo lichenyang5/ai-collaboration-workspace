@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { AiTaskPlanner } from '../components/tasks/AiTaskPlanner';
@@ -103,7 +103,9 @@ export function TaskBoardPage() {
     () => normalizeFilterValues(searchParams),
     [searchParams],
   );
+  const normalizedSearchParams = useMemo(() => toSearchParams(filters), [filters]);
   const [debouncedQuery, setDebouncedQuery] = useState(() => filters.q);
+  const boardMutationGeneration = useRef(0);
   const [board, setBoard] = useState<TaskBoardResponse | null>(null);
   const [lastSuccessfulBoard, setLastSuccessfulBoard] =
     useState<TaskBoardResponse | null>(null);
@@ -139,6 +141,12 @@ export function TaskBoardPage() {
   const [isConfirmingAiDrafts, setIsConfirmingAiDrafts] = useState(false);
 
   useEffect(() => {
+    if (searchParams.toString() !== normalizedSearchParams.toString()) {
+      setSearchParams(normalizedSearchParams, { replace: true });
+    }
+  }, [normalizedSearchParams, searchParams, setSearchParams]);
+
+  useEffect(() => {
     const timer = window.setTimeout(() => {
       setDebouncedQuery(filters.q);
     }, 250);
@@ -154,6 +162,7 @@ export function TaskBoardPage() {
     () => toBoardQuery(boardFilters),
     [boardFilters],
   );
+  const isKeywordDebouncing = filters.q !== debouncedQuery;
 
   useEffect(() => {
     if (!projectId) {
@@ -162,7 +171,12 @@ export function TaskBoardPage() {
       return;
     }
 
+    if (isKeywordDebouncing) {
+      return;
+    }
+
     let isActive = true;
+    const requestMutationGeneration = boardMutationGeneration.current;
     setIsLoading(true);
     setBoardError('');
 
@@ -171,12 +185,18 @@ export function TaskBoardPage() {
         const result = await apiRequest<TaskBoardResponse>(
           `api/projects/${projectId}/tasks${boardQuery ? `?${boardQuery}` : ''}`,
         );
-        if (isActive) {
+        if (
+          isActive &&
+          requestMutationGeneration === boardMutationGeneration.current
+        ) {
           setBoard(result);
           setLastSuccessfulBoard(result);
         }
       } catch (error: unknown) {
-        if (isActive) {
+        if (
+          isActive &&
+          requestMutationGeneration === boardMutationGeneration.current
+        ) {
           setBoardError(
             error instanceof Error
               ? error.message
@@ -194,7 +214,12 @@ export function TaskBoardPage() {
     return () => {
       isActive = false;
     };
-  }, [boardQuery, boardRequestGeneration, projectId]);
+  }, [
+    boardQuery,
+    boardRequestGeneration,
+    isKeywordDebouncing,
+    projectId,
+  ]);
 
   const visibleBoard = board ?? lastSuccessfulBoard;
   const teamId = visibleBoard?.teamId;
@@ -250,6 +275,10 @@ export function TaskBoardPage() {
     setBoardRequestGeneration((generation) => generation + 1);
   }
 
+  function invalidateBoardLoadsBeforeMutation() {
+    boardMutationGeneration.current += 1;
+  }
+
   async function handleCreateTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!projectId || isCreating) {
@@ -301,6 +330,7 @@ export function TaskBoardPage() {
             }
           : currentBoard,
       );
+      invalidateBoardLoadsBeforeMutation();
       setTitle('');
       setDescription('');
       setPriority('medium');
@@ -334,6 +364,7 @@ export function TaskBoardPage() {
         },
       );
       moveTaskInBoards(task.id, fromStatus, toStatus, updatedTask);
+      invalidateBoardLoadsBeforeMutation();
     } catch (error: unknown) {
       setErrorMessage(
         error instanceof Error ? error.message : '任务状态更新失败，请稍后重试',
@@ -438,6 +469,7 @@ export function TaskBoardPage() {
         },
       );
       replaceTask(updatedTask);
+      invalidateBoardLoadsBeforeMutation();
       setEditingTask(null);
     } catch (error: unknown) {
       setTaskEditError(
@@ -534,6 +566,7 @@ export function TaskBoardPage() {
           : currentBoard;
       setBoard(appendTasks);
       setLastSuccessfulBoard(appendTasks);
+      invalidateBoardLoadsBeforeMutation();
       setAiGoal('');
       setAiDrafts([]);
     } catch (error: unknown) {
@@ -733,6 +766,7 @@ export function TaskBoardPage() {
                             <TaskCard
                               task={task}
                               isMoving={movingTaskId === task.id}
+                              isSaving={isSavingTask}
                               dueLabel={getTaskDueLabel(task, today)}
                               onEdit={openTaskEditor}
                               onMove={(currentTask) => void handleMoveTask(currentTask)}

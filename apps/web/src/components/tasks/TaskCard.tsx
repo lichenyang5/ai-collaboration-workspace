@@ -39,6 +39,7 @@ function dueLabelClassName(dueLabel: string): string {
 export interface TaskCardProps {
   task: TaskSummary;
   isMoving: boolean;
+  isSaving: boolean;
   dueLabel: string | null;
   onEdit(task: TaskSummary): void;
   onMove(task: TaskSummary): void;
@@ -47,11 +48,13 @@ export interface TaskCardProps {
 export function TaskCard({
   task,
   isMoving,
+  isSaving,
   dueLabel,
   onEdit,
   onMove,
 }: TaskCardProps) {
   const nextStatus = getNextStatus(task.status);
+  const isActionPending = isMoving || isSaving;
 
   return (
     <article className="task-card">
@@ -73,7 +76,7 @@ export function TaskCard({
         <button
           type="button"
           className="task-secondary-button"
-          disabled={isMoving}
+          disabled={isActionPending}
           onClick={() => onEdit(task)}
           aria-label={`编辑详情：${task.title}`}
         >
@@ -81,7 +84,7 @@ export function TaskCard({
         </button>
         <button
           type="button"
-          disabled={isMoving}
+          disabled={isActionPending}
           onClick={() => onMove(task)}
           aria-label={`移动“${task.title}”到${statusLabels[nextStatus]}`}
         >

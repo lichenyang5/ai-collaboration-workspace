@@ -12,6 +12,8 @@ describe('getTaskDueLabel', () => {
       '三天内到期',
     ],
     ['overdue', { status: 'todo', dueDate: '2026-08-10T00:00:00.000Z' }, '已逾期'],
+    ['no date', { status: 'todo', dueDate: null }, null],
+    ['four days later', { status: 'todo', dueDate: '2026-08-15T00:00:00.000Z' }, null],
     ['completed', { status: 'done', dueDate: '2026-08-10T00:00:00.000Z' }, null],
   ] as const)('returns %s label from a UTC calendar date', (_caseName, task, expected) => {
     expect(getTaskDueLabel(task, today)).toBe(expected);
