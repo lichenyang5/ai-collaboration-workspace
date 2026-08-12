@@ -68,6 +68,7 @@ describe('TeamsService addTeamMember', () => {
       user: invitedUser,
       role: TeamMemberRole.Member,
     });
+    expect(memberRepository.create).toHaveBeenCalledTimes(1);
     expect(memberRepository.save).toHaveBeenCalledTimes(1);
   });
 
@@ -105,11 +106,16 @@ describe('TeamsService addTeamMember', () => {
       relations: { user: true },
     });
     expect(memberRepository.save).toHaveBeenCalledTimes(1);
+    expect(memberRepository.findOne).toHaveBeenCalledTimes(3);
   });
 
   it('rethrows non-unique save errors unchanged', async () => {
-    const saveFailure = new Error('database unavailable');
-    const { service } = serviceWith({
+    const saveFailure = new QueryFailedError(
+      'INSERT INTO team_members',
+      [],
+      Object.assign(new Error('foreign key violation'), { code: '23503' }),
+    );
+    const { service, memberRepository } = serviceWith({
       memberFindOne: jest.fn(async (options) =>
         options.where?.user?.id === 'owner-user-1' ? ownerMembership : null,
       ),
@@ -125,6 +131,8 @@ describe('TeamsService addTeamMember', () => {
         'owner-user-1',
       ),
     ).rejects.toBe(saveFailure);
+
+    expect(memberRepository.findOne).toHaveBeenCalledTimes(2);
   });
 
   function serviceWith({
