@@ -1,10 +1,5 @@
-import {
-  ConflictException,
-  ForbiddenException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { DataSource, QueryFailedError } from 'typeorm';
 import {
   TeamMember,
   TeamMemberRole,
@@ -98,10 +93,11 @@ export class TeamsService {
     const teamMemberRepository = this.dataSource.getRepository(TeamMember);
     const existingMember = await teamMemberRepository.findOne({
       where: { team: { id: teamId }, user: { id: user.id } },
+      relations: { user: true },
     });
 
     if (existingMember) {
-      throw new ConflictException('该用户已是团队成员');
+      return this.toTeamMemberSummary(existingMember);
     }
 
     const member = teamMemberRepository.create({
@@ -109,7 +105,28 @@ export class TeamsService {
       user,
       role: TeamMemberRole.Member,
     });
-    await teamMemberRepository.save(member);
+    try {
+      await teamMemberRepository.save(member);
+    } catch (error) {
+      if (
+        !(error instanceof QueryFailedError) ||
+        (error.driverError as { code?: unknown }).code !== '23505'
+      ) {
+        throw error;
+      }
+
+      const persistedMember = await teamMemberRepository.findOne({
+        where: { team: { id: teamId }, user: { id: user.id } },
+        relations: { user: true },
+      });
+
+      if (persistedMember) {
+        return this.toTeamMemberSummary(persistedMember);
+      }
+
+      throw error;
+    }
+
     return this.toTeamMemberSummary(member);
   }
 
