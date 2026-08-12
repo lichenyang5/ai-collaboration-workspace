@@ -38,6 +38,7 @@ type ProjectPageAction =
   | { type: 'invitationContextChanged' }
   | { type: 'inviteStarted' }
   | { type: 'inviteFailed'; message: string }
+  | { type: 'memberReconciled'; member: TeamMemberSummary }
   | { type: 'memberInvited'; member: TeamMemberSummary };
 
 const initialProjectPageState: ProjectPageState = {
@@ -105,19 +106,31 @@ function projectPageReducer(
         isInviting: false,
         errorMessage: action.message,
       };
+    case 'memberReconciled':
+      return {
+        ...state,
+        members: upsertMember(state.members, action.member),
+      };
     case 'memberInvited':
       return {
         ...state,
-        members: state.members.some((member) => member.id === action.member.id)
-          ? state.members.map((member) =>
-              member.id === action.member.id ? action.member : member,
-            )
-          : [...state.members, action.member],
+        members: upsertMember(state.members, action.member),
         memberEmail: '',
         isInviting: false,
         errorMessage: '',
       };
   }
+}
+
+function upsertMember(
+  members: TeamMemberSummary[],
+  memberToUpsert: TeamMemberSummary,
+): TeamMemberSummary[] {
+  return members.some((member) => member.id === memberToUpsert.id)
+    ? members.map((member) =>
+        member.id === memberToUpsert.id ? memberToUpsert : member,
+      )
+    : [...members, memberToUpsert];
 }
 
 export function ProjectListPage() {
@@ -252,6 +265,8 @@ export function ProjectListPage() {
         invitationTeamIdRef.current === invitationTeamId
       ) {
         dispatch({ type: 'memberInvited', member });
+      } else if (invitationTeamIdRef.current === invitationTeamId) {
+        dispatch({ type: 'memberReconciled', member });
       }
     } catch (error: unknown) {
       if (
