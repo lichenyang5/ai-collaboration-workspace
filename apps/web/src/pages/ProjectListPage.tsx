@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useState } from 'react';
+import { useEffect, useReducer, useRef } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { apiRequest } from '../services/api';
@@ -17,6 +17,7 @@ interface ProjectPageState {
   memberEmail: string;
   isLoading: boolean;
   isCreating: boolean;
+  isInviting: boolean;
   errorMessage: string;
 }
 
@@ -34,6 +35,7 @@ type ProjectPageAction =
   | { type: 'creationStarted' }
   | { type: 'creationFailed'; message: string }
   | { type: 'projectCreated'; project: ProjectSummary }
+  | { type: 'inviteStarted' }
   | { type: 'inviteFailed'; message: string }
   | { type: 'memberInvited'; member: TeamMemberSummary };
 
@@ -46,6 +48,7 @@ const initialProjectPageState: ProjectPageState = {
   memberEmail: '',
   isLoading: true,
   isCreating: false,
+  isInviting: false,
   errorMessage: '',
 };
 
@@ -86,13 +89,24 @@ function projectPageReducer(
         isCreating: false,
         errorMessage: '',
       };
+    case 'inviteStarted':
+      return { ...state, isInviting: true, errorMessage: '' };
     case 'inviteFailed':
-      return { ...state, errorMessage: action.message };
+      return {
+        ...state,
+        isInviting: false,
+        errorMessage: action.message,
+      };
     case 'memberInvited':
       return {
         ...state,
-        members: [...state.members, action.member],
+        members: state.members.some((member) => member.id === action.member.id)
+          ? state.members.map((member) =>
+              member.id === action.member.id ? action.member : member,
+            )
+          : [...state.members, action.member],
         memberEmail: '',
+        isInviting: false,
         errorMessage: '',
       };
   }
@@ -104,7 +118,7 @@ export function ProjectListPage() {
     projectPageReducer,
     initialProjectPageState,
   );
-  const [isInviting, setIsInviting] = useState(false);
+  const invitationPendingRef = useRef(false);
 
   useEffect(() => {
     if (!teamId) {
@@ -193,7 +207,7 @@ export function ProjectListPage() {
 
   async function handleInviteMember(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!teamId || isInviting || state.teamRole !== 'owner') {
+    if (invitationPendingRef.current || !teamId || state.teamRole !== 'owner') {
       return;
     }
 
@@ -203,7 +217,8 @@ export function ProjectListPage() {
       return;
     }
 
-    setIsInviting(true);
+    invitationPendingRef.current = true;
+    dispatch({ type: 'inviteStarted' });
     try {
       const member = await apiRequest<TeamMemberSummary>(
         `api/teams/${teamId}/members`,
@@ -221,7 +236,7 @@ export function ProjectListPage() {
           error instanceof Error ? error.message : '邀请成员失败，请稍后重试',
       });
     } finally {
-      setIsInviting(false);
+      invitationPendingRef.current = false;
     }
   }
 
@@ -289,8 +304,8 @@ export function ProjectListPage() {
                 maxLength={255}
                 placeholder="输入已注册成员的邮箱"
               />
-              <button type="submit" disabled={isInviting || !teamId}>
-                {isInviting ? '邀请中...' : '邀请成员'}
+              <button type="submit" disabled={state.isInviting || !teamId}>
+                {state.isInviting ? '邀请中...' : '邀请成员'}
               </button>
             </form>
           ) : null}

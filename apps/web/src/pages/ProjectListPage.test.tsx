@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -191,6 +191,231 @@ describe('ProjectListPage', () => {
         body: JSON.stringify({ email: 'member@example.com' }),
       }),
     );
+  });
+
+  it('reconciles an existing invited member by id with the authoritative response', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith('/api/teams/team-1/members') && init?.method === 'POST') {
+        return new Response(
+          JSON.stringify({
+            id: 'member-user-2',
+            displayName: 'Authoritative Member',
+            email: 'member@example.com',
+            role: 'owner',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      if (url.endsWith('/api/teams/team-1/members')) {
+        return new Response(
+          JSON.stringify([
+            {
+              id: 'member-user-2',
+              displayName: 'Stale Member',
+              email: 'member@example.com',
+              role: 'member',
+            },
+          ]),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      if (url.endsWith('/api/teams/team-1/projects')) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url.endsWith('/api/teams')) {
+        return new Response(
+          JSON.stringify([{ id: 'team-1', name: 'Team One', role: 'owner' }]),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={['/teams/team-1/projects']}>
+        <Routes>
+          <Route path="/teams/:teamId/projects" element={<ProjectListPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Stale Member')).toBeInTheDocument();
+    const emailInput = screen.getByLabelText('\u6210\u5458\u90ae\u7bb1');
+    await user.type(emailInput, 'member@example.com');
+    await user.click(screen.getByRole('button', { name: '\u9080\u8bf7\u6210\u5458' }));
+
+    expect(await screen.findByText('Authoritative Member')).toBeInTheDocument();
+    expect(screen.queryByText('Stale Member')).not.toBeInTheDocument();
+    expect(screen.getAllByText('member@example.com')).toHaveLength(1);
+    expect(emailInput).toHaveValue('');
+    expect(screen.getByRole('button', { name: '\u9080\u8bf7\u6210\u5458' })).toBeEnabled();
+  });
+
+  it('issues one invitation request for two synchronous submits and restores the button', async () => {
+    let resolveInvitation: (response: Response) => void;
+    const invitationResponse = new Promise<Response>((resolve) => {
+      resolveInvitation = resolve;
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith('/api/teams/team-1/members') && init?.method === 'POST') {
+        return invitationResponse;
+      }
+
+      if (url.endsWith('/api/teams/team-1/members')) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url.endsWith('/api/teams/team-1/projects')) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url.endsWith('/api/teams')) {
+        return new Response(
+          JSON.stringify([{ id: 'team-1', name: 'Team One', role: 'owner' }]),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/teams/team-1/projects']}>
+        <Routes>
+          <Route path="/teams/:teamId/projects" element={<ProjectListPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const emailInput = await screen.findByLabelText('\u6210\u5458\u90ae\u7bb1');
+    fireEvent.change(emailInput, { target: { value: 'member@example.com' } });
+    const invitationForm = emailInput.closest('form');
+    expect(invitationForm).not.toBeNull();
+
+    fireEvent.submit(invitationForm!);
+    fireEvent.submit(invitationForm!);
+
+    const invitationPosts = fetchMock.mock.calls.filter(
+      ([input, init]) =>
+        String(input).endsWith('/api/teams/team-1/members') &&
+        (init as RequestInit | undefined)?.method === 'POST',
+    );
+    expect(invitationPosts).toHaveLength(1);
+
+    resolveInvitation!(
+      new Response(
+        JSON.stringify({
+          id: 'member-user-2',
+          displayName: 'Member Two',
+          email: 'member@example.com',
+          role: 'member',
+        }),
+        { status: 201, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '\u9080\u8bf7\u6210\u5458' })).toBeEnabled();
+    });
+  });
+
+  it('clears an old invitation error while a retry is pending and restores the button after failure', async () => {
+    let resolveRetry: (response: Response) => void;
+    const retryResponse = new Promise<Response>((resolve) => {
+      resolveRetry = resolve;
+    });
+    let invitationAttempts = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith('/api/teams/team-1/members') && init?.method === 'POST') {
+        invitationAttempts += 1;
+        if (invitationAttempts === 1) {
+          return new Response(JSON.stringify({ message: 'First invitation failed' }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return retryResponse;
+      }
+
+      if (url.endsWith('/api/teams/team-1/members')) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url.endsWith('/api/teams/team-1/projects')) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url.endsWith('/api/teams')) {
+        return new Response(
+          JSON.stringify([{ id: 'team-1', name: 'Team One', role: 'owner' }]),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={['/teams/team-1/projects']}>
+        <Routes>
+          <Route path="/teams/:teamId/projects" element={<ProjectListPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const emailInput = await screen.findByLabelText('\u6210\u5458\u90ae\u7bb1');
+    await user.type(emailInput, 'member@example.com');
+    await user.click(screen.getByRole('button', { name: '\u9080\u8bf7\u6210\u5458' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('First invitation failed');
+    const invitationForm = emailInput.closest('form');
+    expect(invitationForm).not.toBeNull();
+    fireEvent.submit(invitationForm!);
+
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '\u9080\u8bf7\u4e2d...' })).toBeDisabled();
+    });
+
+    resolveRetry!(
+      new Response(JSON.stringify({ message: 'Retry invitation failed' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Retry invitation failed');
+    expect(screen.getByRole('button', { name: '\u9080\u8bf7\u6210\u5458' })).toBeEnabled();
   });
 
   it('reenables the invitation button after the server rejects an invitation', async () => {
