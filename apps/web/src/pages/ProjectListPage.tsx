@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useRef } from 'react';
+import { useEffect, useLayoutEffect, useReducer, useRef } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { apiRequest } from '../services/api';
@@ -35,6 +35,7 @@ type ProjectPageAction =
   | { type: 'creationStarted' }
   | { type: 'creationFailed'; message: string }
   | { type: 'projectCreated'; project: ProjectSummary }
+  | { type: 'invitationContextChanged' }
   | { type: 'inviteStarted' }
   | { type: 'inviteFailed'; message: string }
   | { type: 'memberInvited'; member: TeamMemberSummary };
@@ -89,6 +90,13 @@ function projectPageReducer(
         isCreating: false,
         errorMessage: '',
       };
+    case 'invitationContextChanged':
+      return {
+        ...state,
+        memberEmail: '',
+        isInviting: false,
+        errorMessage: '',
+      };
     case 'inviteStarted':
       return { ...state, isInviting: true, errorMessage: '' };
     case 'inviteFailed':
@@ -119,6 +127,15 @@ export function ProjectListPage() {
     initialProjectPageState,
   );
   const invitationPendingRef = useRef(false);
+  const invitationTeamIdRef = useRef(teamId);
+  const invitationGenerationRef = useRef(0);
+
+  useLayoutEffect(() => {
+    invitationGenerationRef.current += 1;
+    invitationTeamIdRef.current = teamId;
+    invitationPendingRef.current = false;
+    dispatch({ type: 'invitationContextChanged' });
+  }, [teamId]);
 
   useEffect(() => {
     if (!teamId) {
@@ -218,6 +235,8 @@ export function ProjectListPage() {
     }
 
     invitationPendingRef.current = true;
+    const invitationGeneration = invitationGenerationRef.current;
+    const invitationTeamId = teamId;
     dispatch({ type: 'inviteStarted' });
     try {
       const member = await apiRequest<TeamMemberSummary>(
@@ -228,15 +247,30 @@ export function ProjectListPage() {
           body: JSON.stringify({ email }),
         },
       );
-      dispatch({ type: 'memberInvited', member });
+      if (
+        invitationGenerationRef.current === invitationGeneration &&
+        invitationTeamIdRef.current === invitationTeamId
+      ) {
+        dispatch({ type: 'memberInvited', member });
+      }
     } catch (error: unknown) {
-      dispatch({
-        type: 'inviteFailed',
-        message:
-          error instanceof Error ? error.message : '邀请成员失败，请稍后重试',
-      });
+      if (
+        invitationGenerationRef.current === invitationGeneration &&
+        invitationTeamIdRef.current === invitationTeamId
+      ) {
+        dispatch({
+          type: 'inviteFailed',
+          message:
+            error instanceof Error ? error.message : '邀请成员失败，请稍后重试',
+        });
+      }
     } finally {
-      invitationPendingRef.current = false;
+      if (
+        invitationGenerationRef.current === invitationGeneration &&
+        invitationTeamIdRef.current === invitationTeamId
+      ) {
+        invitationPendingRef.current = false;
+      }
     }
   }
 
