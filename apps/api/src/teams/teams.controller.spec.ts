@@ -18,10 +18,19 @@ describe('Team creation', () => {
     const teamRepository = {
       create: jest.fn((value: object) => ({ id: 'team-1', ...value })),
       save: jest.fn(async (value: object) => value),
+      findOne: jest.fn(async () => ({ id: 'team-1', name: '产品研发组' })),
     };
     const memberRepository = {
       create: jest.fn((value: object) => value),
-      save: jest.fn(async (value: object) => value),
+      save: jest.fn(async (value: object) =>
+        'role' in value
+          ? {
+              ...value,
+              id: 'membership-2',
+              createdAt: new Date('2026-08-14T08:00:00.000Z'),
+            }
+          : value,
+      ),
       find: jest.fn(async () => [
         {
           role: 'owner',

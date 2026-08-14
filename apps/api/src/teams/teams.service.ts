@@ -6,6 +6,7 @@ import {
 } from '../database/entities/team-member.entity';
 import { Team } from '../database/entities/team.entity';
 import { User } from '../database/entities/user.entity';
+import { RealtimeNotifier } from '../realtime/realtime-notifier.service';
 import { CreateTeamDto } from './dto/create-team.dto';
 import { AddTeamMemberDto } from './dto/add-team-member.dto';
 
@@ -24,7 +25,10 @@ export interface TeamMemberSummary {
 
 @Injectable()
 export class TeamsService {
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly realtimeNotifier: RealtimeNotifier,
+  ) {}
 
   async createTeam(input: CreateTeamDto, ownerId: string): Promise<Team> {
     return this.dataSource.transaction(async (manager) => {
@@ -81,6 +85,14 @@ export class TeamsService {
     requesterId: string,
   ): Promise<TeamMemberSummary> {
     await this.requireOwner(teamId, requesterId);
+    const team = await this.dataSource.getRepository(Team).findOne({
+      where: { id: teamId },
+      select: { id: true, name: true },
+    });
+    if (!team) {
+      throw new NotFoundException('团队不存在');
+    }
+
     const userRepository = this.dataSource.getRepository(User);
     const user = await userRepository.findOne({
       where: { email: input.email.trim().toLowerCase() },
@@ -106,7 +118,15 @@ export class TeamsService {
       role: TeamMemberRole.Member,
     });
     try {
-      await teamMemberRepository.save(member);
+      const savedMember = await teamMemberRepository.save(member);
+      this.realtimeNotifier.notifyTeamMembershipCreated(user.id, {
+        eventId: savedMember.id,
+        teamId: team.id,
+        teamName: team.name,
+        role: 'member',
+        occurredAt: savedMember.createdAt.toISOString(),
+      });
+      return this.toTeamMemberSummary(savedMember);
     } catch (error) {
       if (
         !(error instanceof QueryFailedError) ||
@@ -126,8 +146,6 @@ export class TeamsService {
 
       throw error;
     }
-
-    return this.toTeamMemberSummary(member);
   }
 
   private async requireMembership(
