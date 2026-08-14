@@ -6,6 +6,7 @@ import { TeamsModule } from './teams/teams.module';
 import { ProjectsModule } from './projects/projects.module';
 import { TasksModule } from './tasks/tasks.module';
 import { AiModule } from './ai/ai.module';
+import { RealtimeModule } from './realtime/realtime.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { AiModule } from './ai/ai.module';
     ProjectsModule,
     TasksModule,
     AiModule,
+    RealtimeModule,
   ],
   controllers: [HealthController],
 })
