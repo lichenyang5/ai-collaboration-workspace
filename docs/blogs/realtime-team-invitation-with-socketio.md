@@ -356,13 +356,255 @@ throw error;
 
 前端把连接生命周期放入 Provider，把展示和数据同步拆成不同职责。
 
+### 8.1 只在登录后创建连接
+
+`App` 启动时先通过 `GET /api/auth/me` 恢复登录状态。没有有效用户时，只渲染登录相关路由；确认 `currentUser` 后，才挂载实时 Provider：
+
+```tsx
+if (!currentUser) return routes;
+
+return (
+  <RealtimeProvider user={currentUser}>
+    <RealtimeNotificationCenter />
+    {routes}
+  </RealtimeProvider>
+);
+```
+
+这样匿名访问者不会反复尝试一个必然失败的 WebSocket 鉴权。退出登录以后 Provider 卸载，清理函数会解除事件监听并主动 `disconnect()`。
+
+客户端连接配置如下：
+
+```ts
+const socket = io(apiBaseUrl, {
+  withCredentials: true,
+  autoConnect: true,
+  transports: ['websocket'],
+});
+```
+
+`apiBaseUrl` 来自 `VITE_API_BASE_URL`，开发环境默认是 `http://localhost:3001`。`withCredentials` 让浏览器握手携带登录 Cookie；`autoConnect` 在 effect 创建 socket 后立即连接；`transports` 明确只使用 WebSocket。
+
+### 8.2 事件进入 Provider 后发生什么
+
+Provider 维护两个对外状态：
+
+```ts
+const [notifications, setNotifications] =
+  useState<TeamMembershipCreatedEvent[]>([]);
+const [teamRefreshVersion, setTeamRefreshVersion] = useState(0);
+const seenEventIds = useRef(new Set<string>());
+```
+
+收到事件时：
+
+```ts
+const handleMembershipCreated = (event: TeamMembershipCreatedEvent) => {
+  if (
+    generation !== generationRef.current ||
+    seenEventIds.current.has(event.eventId)
+  ) return;
+
+  seenEventIds.current.add(event.eventId);
+  setNotifications((current) => [...current, event]);
+  setTeamRefreshVersion((current) => current + 1);
+};
+```
+
+它做了三件相互独立的事：
+
+1. 用 `eventId` 去重，避免同一事件重复进入页面；
+2. 把通知追加到队列，而不是覆盖正在显示的通知；
+3. 增加刷新版本，通知关心团队数据的页面重新请求。
+
+这里没有直接把事件转换成完整 `TeamSummary`。事件里的 `teamName` 足够显示 toast，却不足以代表所有团队字段和服务端最新顺序，所以仍需 REST 回源。
+
+### 8.3 通知中心只负责展示
+
+`RealtimeNotificationCenter` 每次只取队列第一项：
+
+```tsx
+const notification = notifications[0];
+
+return (
+  <aside className="realtime-notification" role="status" aria-live="polite">
+    <p>你已加入「{notification.teamName}」</p>
+    <Link to={`/teams/${notification.teamId}/projects`}>查看团队</Link>
+    <button type="button">关闭</button>
+  </aside>
+);
+```
+
+通知固定在页面右下角。用户可以点击“查看团队”进入 `/teams/:teamId/projects`，也可以手动关闭；不操作时，`setTimeout` 会在 5 秒后移除当前事件。如果队列里还有下一条，下一条随后成为第一项并开始自己的 5 秒计时。
+
+`role="status"` 与 `aria-live="polite"` 让辅助技术能够在不打断当前操作的情况下播报变化。这是一个很小但值得保留的可访问性细节。
+
+### 8.4 `teamRefreshVersion` 如何驱动列表更新
+
+工作区页面通过 Context 读取版本：
+
+```ts
+const { teamRefreshVersion } = useRealtime();
+
+useEffect(() => {
+  if (lastRefreshVersionRef.current === teamRefreshVersion) return;
+  lastRefreshVersionRef.current = teamRefreshVersion;
+  void loadTeams(requestGenerationRef.current);
+}, [loadTeams, teamRefreshVersion]);
+```
+
+每次新的邀请事件让版本 `+1`，effect 调用 `GET /api/teams`。如果 Bob 此时不在工作区页面，通知仍然能显示；他之后返回工作区时，页面初始加载本身也会请求团队列表，因此照样可以看到新团队。
+
+如果 REST 重新同步失败，页面显示“实时同步失败，可刷新页面重试”，但不会撤回已经展示的通知，也不会伪造一份团队数据。这再次体现了通知状态与业务数据状态的分离。
+
 ## 9. 真正困难的部分：异步竞态与会话隔离
 
 能够收到一条事件只是开始；可靠实现还必须处理切换账号、重复点击、旧请求后返回和断线恢复。
 
+### 9.1 邀请按钮为什么不能只依赖 `isInviting`
+
+React 的状态更新不会在当前事件处理函数中同步改变变量。用户极快地连续提交两次时，第二次处理函数可能仍读取到旧的 `isInviting === false`。
+
+因此邀请页面同时使用同步 ref：
+
+```ts
+if (invitationPendingRef.current || !teamId || state.teamRole !== 'owner') {
+  return;
+}
+
+invitationPendingRef.current = true;
+dispatch({ type: 'inviteStarted' });
+```
+
+ref 在第一次提交中立即变为 `true`，第二次提交会直接返回；React 状态则负责让按钮显示“邀请中...”并禁用。成功后 reducer 用成员 ID 执行 upsert，同时清空邮箱、恢复按钮和错误状态。
+
+这也解释了为什么“接口成功但按钮一直邀请中”不能只看数据库。数据库有成员只证明 POST 成功，按钮是否恢复取决于前端请求上下文的 `success / catch / finally` 是否仍然属于当前页面。
+
+### 9.2 团队路由切换与 ABA 问题
+
+想象这个顺序：
+
+```text
+团队 A 发起邀请 -> 切到团队 B -> 又切回团队 A -> 旧请求才返回
+```
+
+只比较 `teamId` 不够，因为开始和结束都是 A，这就是常见的 ABA 问题。页面为每次邀请上下文保存单调递增的 generation：
+
+```ts
+useLayoutEffect(() => {
+  invitationGenerationRef.current += 1;
+  invitationTeamIdRef.current = teamId;
+  invitationPendingRef.current = false;
+  dispatch({ type: 'invitationContextChanged' });
+}, [teamId]);
+```
+
+请求开始时捕获 generation 和 team ID。旧请求成功时，如果当前 generation 仍相同，才能清空当前输入和结束当前按钮状态；如果 generation 已变化但当前又回到原团队，只允许 `memberReconciled` 更新成员数组，不能清掉用户在新一轮 A 页面里刚输入的邮箱，更不能释放新请求的 busy 状态。
+
+### 9.3 切换登录用户必须创建全新的实时会话
+
+Provider 外层使用：
+
+```tsx
+export function RealtimeProvider({ user, children }: RealtimeProviderProps) {
+  return <RealtimeSession key={user.id}>{children}</RealtimeSession>;
+}
+```
+
+当登录用户从 A 变成 B，React 因 `key` 改变而卸载旧 `RealtimeSession`，重新创建所有 state 和 ref。旧用户的通知队列、去重集合和刷新版本不会泄露给新用户。
+
+effect 内还有 generation 检查。即使旧 socket 的回调刚好在清理边界触发，它持有的 generation 也已经失效，不能再写入当前会话。这是“组件实例隔离 + 回调令牌校验”两层保护。
+
+### 9.4 首次失败与断线重连不是同一件事
+
+正常第一次连接成功时，页面已经执行自己的初始 REST 加载，不需要额外请求。可是下面两种情况需要补偿：
+
+- 页面打开时 API 暂不可用，产生 `connect_error`，之后第一次连上；
+- 已经连接成功，后来发生 `disconnect`，再重新 `connect`。
+
+Provider 分别记录 `initialConnectionFailed`、`hasConnected` 和 `reconnecting`。首次失败后连上，以及正常连接断开后重连，都会把 `teamRefreshVersion` 增加一次。这样即使断线期间漏掉了邀请事件，也可以通过 REST 快照补齐。
+
+注意它不承诺补发 toast。Socket.IO 事件在当前实现中不是持久消息，离线期间的用户可能错过弹窗；补偿的是团队数据，而不是历史通知队列。
+
+### 9.5 为什么团队列表需要“单飞 + 最终追赶”
+
+如果短时间收到多个刷新信号，直接并行发出多个 `GET /api/teams` 会遇到响应乱序：旧请求最后返回，可能覆盖新快照。
+
+`WorkspacePage` 使用两个 ref：
+
+```ts
+if (loadInFlightRef.current) {
+  reloadQueuedRef.current = true;
+  return;
+}
+
+loadInFlightRef.current = true;
+do {
+  reloadQueuedRef.current = false;
+  // await GET /api/teams
+} while (reloadQueuedRef.current);
+```
+
+同一时间只允许一个团队 GET 在途，这就是 single-flight。期间出现的新刷新需求不再创建并行请求，只把 `reloadQueuedRef` 标为真；当前请求结束后再执行一次最终追赶。无论中间积累多少信号，最终至少有一份在它们之后发出的权威快照。
+
+`requestGenerationRef` 还把请求绑定到当前用户。登出或切换用户会增加 generation，旧用户请求即使后来成功，也会因 generation 不匹配而被丢弃。
+
+### 9.6 本地创建团队与实时刷新也可能竞争
+
+Bob 收到邀请触发 GET 的同时，也可能正在创建自己的团队。假设 GET 先发出，创建 POST 后成功并把新团队加入本地数组，随后旧 GET 才返回；如果直接 `setTeams(result)`，刚创建成功的团队会短暂消失。
+
+页面用 `teamMutationVersionRef` 记录已确认的本地创建。GET 开始时捕获版本，返回时只有版本未变才直接替换列表；如果期间发生创建，旧快照不能覆盖本地成功结果，而是安排下一次 GET。最终的追赶请求再用数据库最新状态统一列表。
+
+这套逻辑看起来比“收到消息就 fetch”复杂，但它解决的都是用户真实可见的问题：按钮卡住、新输入被旧请求清空、切换账号后看到上一个人的通知，以及新数据被旧快照覆盖。
+
 ## 10. 安全边界：Origin、Cookie 与 WebSocket transport
 
 WebSocket 是长连接，但它并不会自动继承 REST 端所有安全保证。
+
+### 10.1 当前实现的四层边界
+
+| 层次 | 当前措施 | 解决的问题 |
+| --- | --- | --- |
+| 浏览器来源 | `Origin === CORS_ORIGIN` | 拒绝非预期网页发起实时连接 |
+| Cookie 传递 | 客户端 `withCredentials: true` | 让握手携带现有登录凭据 |
+| 用户身份 | 服务端验证 `access_token` JWT | 确认连接对应哪个用户 |
+| 消息目标 | 服务端加入 `user:{userId}` | 只向被邀请用户的连接发送 |
+
+这四层不能互相替代。合法 Origin 不代表已经登录；携带一个 Cookie 不代表 token 有效；JWT 有效也不能让客户端自己决定加入谁的房间。
+
+### 10.2 为什么客户端强制 WebSocket transport
+
+Socket.IO 默认可能先用 HTTP polling，再升级到 WebSocket。当前服务端 `allowRequest` 明确拒绝缺少 Origin 的接入请求，而某些同源 polling 请求路径未必表现出与浏览器 WebSocket 握手完全相同的 Origin 语义。
+
+客户端最终显式配置：
+
+```ts
+transports: ['websocket']
+```
+
+这样浏览器从开始就发起 WebSocket 握手，服务端可以按预期检查 Origin，也减少“安全规则接受 WebSocket、却意外挡住 polling 起步阶段”的不一致。
+
+### 10.3 Cookie 的部署含义
+
+登录 Cookie 当前使用 `httpOnly: true`、`sameSite: 'lax'`，生产环境使用 `secure: true`。因此部署时要保证：
+
+- 页面来源与 `CORS_ORIGIN` 精确一致，包括协议、域名和端口；
+- `VITE_API_BASE_URL` 指向同一套 API；
+- HTTPS 页面建立的是兼容的 WSS 连接；
+- 反向代理允许 WebSocket Upgrade，并正确转发 Cookie 与 Origin。
+
+本地默认值是 Web `http://localhost:5173`、API `http://localhost:3001`。如果浏览器实际打开 `http://127.0.0.1:5173`，它与 `http://localhost:5173` 是不同 Origin，也会被拒绝。
+
+### 10.4 当前方案没有解决什么
+
+诚实说明边界比把 Demo 描述成“生产级万能系统”更重要：
+
+- **没有持久化通知中心。** 离线用户不会收到历史 toast，只能靠 REST 数据恢复。
+- **没有跨实例房间同步。** 当前房间存在于单个 Node 进程内；多实例部署需要 Redis Adapter 等共享传输层。
+- **没有 Outbox。** 数据库保存成功、事件发出前如果进程崩溃，事件可能丢失，但成员关系仍可在下次 REST 请求中看到。
+- **没有扩展其他事件。** 项目邀请、任务广播、聊天和在线状态都不在本次范围。
+
+这些限制不影响当前单实例作品 Demo 的目标，却为后续演进给出了清晰方向。
 
 ## 11. 如何证明功能可靠：自动化测试与真实握手
 
