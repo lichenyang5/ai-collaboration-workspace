@@ -6,6 +6,7 @@
 
 - 用户注册、登录、Cookie 会话恢复与退出登录
 - 团队创建、成员邀请和团队内项目管理
+- 团队邀请实时通知与自动同步：受邀成员无需刷新即可收到通知，并在返回工作区时看到新团队
 - 可在待办、进行中、已完成状态标签间切换的任务看板
 - 任务创建、详情编辑、负责人分配、优先级、截止日期与状态流转
 - 按关键词、负责人、优先级和截止状态组合筛选；筛选条件保存在 URL 中
@@ -35,13 +36,13 @@ docs                      设计、实施计划与 Demo 脚本
 
 ```text
 React UI
-  → Cookie 认证的 REST API
-  → 项目所属团队成员权限校验
-  → TypeORM 事务（任务变更与活动记录同时持久化）
-  → PostgreSQL
+  ├─ Cookie 认证的 REST API → PostgreSQL（权威数据）
+  └─ Cookie/JWT 鉴权的 Socket.IO → 用户私有房间 → 变更通知 → REST 重新同步
 
 可选 AI 链路：React → 项目 AI 接口 → SiliconFlow
 ```
+
+REST API 是团队、成员与项目数据的权威来源；Socket.IO 只把已完成的变更通知发给对应用户，客户端收到通知后仍通过 REST 重新同步。因此 Socket.IO 断开时，邀请接口和刷新后的团队列表仍可用。项目所属团队成员权限校验、任务变更与活动记录的 TypeORM 事务都由 REST API 执行。
 
 AI 返回的任务只作为客户端可编辑草稿；用户点击“确认创建任务”后才通过任务接口写入。AI 请求、解析或提供商失败只在 AI 区显示错误，不阻塞看板、筛选和手工任务操作。
 
@@ -217,6 +218,19 @@ npm run dev:web
 
 完整五分钟操作顺序见 [docs/demo-script.md](docs/demo-script.md)。
 
+### 实时团队邀请验证
+
+先按第 7 步在两个终端启动 API 和 Web。然后在 macOS 的同一浏览器中同时打开一个普通窗口和一个无痕窗口，使用不同 Demo 账号完成以下验证：
+
+1. 在普通窗口登录 `demo.alice@workspace.local`。
+2. 在无痕窗口登录 `demo.bob@workspace.local`。
+3. Alice 在团队页面邀请 Bob。
+4. Bob 不刷新页面即可看到通知；返回工作区后团队自动出现。
+5. Bob 点击“查看团队”进入项目列表。
+6. Alice 重复邀请 Bob，Bob 不应收到第二条通知。
+
+邀请仍以 Cookie 认证的 REST API 为准，Socket.IO 仅用于通知。它复用既有的 `VITE_API_BASE_URL`、`CORS_ORIGIN` 和 `JWT_SECRET`，**无需新增环境变量**。排查网络请求时，浏览器 Network 应显示一次成功的邀请 `POST`，以及仅受邀用户发起的一次 `GET /api/teams` 重新同步。
+
 ### 9. 停止、重启和以后更新
 
 - 停止服务：分别切回 API 和 Web 终端，按 `Control + C`。
@@ -260,6 +274,9 @@ npm run db:migrate --workspace @workspace/api
 | `ECONNREFUSED 127.0.0.1:5432` | 打开 Postgres.app，确认数据库服务处于运行状态。 |
 | `EADDRINUSE`，端口 `3001` 或 `5173` 被占用 | 找到之前启动服务的终端并按 `Control + C`，再重新启动。 |
 | 页面打不开，但终端没有报错 | 确认 API 和 Web 两个命令分别在两个终端持续运行，并访问 `http://localhost:5173`。 |
+| Socket.IO 无法连接或反复断开 | 先确认 API 正在运行且浏览器可访问 API 地址；实时通知会不可用，但邀请 REST 请求与刷新后的团队列表仍应正常。检查浏览器 Network/Console 中的 WebSocket 错误后重启 API 和 Web。 |
+| 登录正常但邀请请求或 Socket 连接出现 CORS/Cookie 错误 | 确认 Web 的实际来源与 `CORS_ORIGIN` 一致，并使用 `VITE_API_BASE_URL` 指向同一个 API；跨源 Cookie 需要浏览器允许凭据。修改 `.env` 后重启 API 和 Web。 |
+| 受邀人离线时没有看到通知 | 离线用户可能错过瞬时 toast；重新登录或恢复 REST 会话后，团队会由 `GET /api/teams` 返回并显示。 |
 | AI 提示“尚未配置” | 检查 `SILICONFLOW_API_KEY` 是否已填写，修改 `.env` 后重启 API。 |
 | AI 返回 `401` / 认证失败 | Key 无效、被删除或复制不完整；在 SiliconFlow 控制台新建 Key 后替换并重启 API。 |
 | AI 返回 `429` / 请求过于频繁 | 检查账号额度和限流，稍后重试，必要时在控制台更换可用模型。 |
