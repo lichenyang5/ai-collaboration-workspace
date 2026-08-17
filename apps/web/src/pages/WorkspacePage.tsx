@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link } from 'react-router-dom';
+import { useRealtime } from '../realtime/RealtimeProvider';
 import { apiRequest } from '../services/api';
 import type { PublicUser } from '../types/auth';
 import type { TeamSummary } from '../types/workspace';
@@ -16,38 +17,105 @@ interface CreatedTeam {
 }
 
 export function WorkspacePage({ user, onLogout }: WorkspacePageProps) {
+  const { teamRefreshVersion } = useRealtime();
   const [teams, setTeams] = useState<TeamSummary[]>([]);
   const [teamName, setTeamName] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const loadInFlightRef = useRef(false);
+  const reloadQueuedRef = useRef(false);
+  const requestGenerationRef = useRef(0);
+  const hasInitialResultRef = useRef(false);
+  const lastRefreshVersionRef = useRef(teamRefreshVersion);
+  const teamMutationVersionRef = useRef(0);
 
-  useEffect(() => {
-    let isActive = true;
-
-    async function loadTeams() {
-      try {
-        const result = await apiRequest<TeamSummary[]>('api/teams');
-        if (isActive) {
-          setTeams(result);
-        }
-      } catch (error: unknown) {
-        if (isActive) {
-          setErrorMessage(error instanceof Error ? error.message : '团队加载失败，请稍后重试');
-        }
-      } finally {
-        if (isActive) {
-          setIsLoading(false);
-        }
-      }
+  const loadTeams = useCallback(async (generation: number) => {
+    if (generation !== requestGenerationRef.current) {
+      return;
+    }
+    if (loadInFlightRef.current) {
+      reloadQueuedRef.current = true;
+      return;
     }
 
-    void loadTeams();
-    return () => {
-      isActive = false;
-    };
+    loadInFlightRef.current = true;
+    try {
+      do {
+        reloadQueuedRef.current = false;
+        const isInitialLoad = !hasInitialResultRef.current;
+        const mutationVersion = teamMutationVersionRef.current;
+
+        try {
+          const result = await apiRequest<TeamSummary[]>('api/teams');
+          if (generation !== requestGenerationRef.current) {
+            return;
+          }
+          if (mutationVersion === teamMutationVersionRef.current) {
+            setTeams(result);
+          } else {
+            reloadQueuedRef.current = true;
+          }
+          setErrorMessage('');
+        } catch (error: unknown) {
+          if (generation !== requestGenerationRef.current) {
+            return;
+          }
+          setErrorMessage(
+            isInitialLoad
+              ? error instanceof Error
+                ? error.message
+                : '团队加载失败，请稍后重试'
+              : '实时同步失败，可刷新页面重试',
+          );
+        } finally {
+          if (generation !== requestGenerationRef.current) {
+            return;
+          }
+          if (isInitialLoad) {
+            hasInitialResultRef.current = true;
+            setIsLoading(false);
+          }
+        }
+      } while (reloadQueuedRef.current && generation === requestGenerationRef.current);
+    } finally {
+      if (generation === requestGenerationRef.current) {
+        loadInFlightRef.current = false;
+      }
+    }
   }, []);
+
+  useEffect(() => {
+    const generation = requestGenerationRef.current + 1;
+    requestGenerationRef.current = generation;
+    loadInFlightRef.current = false;
+    reloadQueuedRef.current = false;
+    hasInitialResultRef.current = false;
+    lastRefreshVersionRef.current = teamRefreshVersion;
+    teamMutationVersionRef.current = 0;
+    setTeams([]);
+    setErrorMessage('');
+    setIsLoading(true);
+    setIsCreating(false);
+
+    void loadTeams(generation);
+    return () => {
+      if (requestGenerationRef.current === generation) {
+        requestGenerationRef.current += 1;
+        loadInFlightRef.current = false;
+        reloadQueuedRef.current = false;
+      }
+    };
+  }, [loadTeams, user.id]);
+
+  useEffect(() => {
+    if (lastRefreshVersionRef.current === teamRefreshVersion) {
+      return;
+    }
+    lastRefreshVersionRef.current = teamRefreshVersion;
+    void loadTeams(requestGenerationRef.current);
+  }, [loadTeams, teamRefreshVersion]);
 
   async function handleCreateTeam(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -58,21 +126,34 @@ export function WorkspacePage({ user, onLogout }: WorkspacePageProps) {
 
     setErrorMessage('');
     setIsCreating(true);
+    const generation = requestGenerationRef.current;
     try {
       const createdTeam = await apiRequest<CreatedTeam>('api/teams', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
       });
+      if (generation !== requestGenerationRef.current) {
+        return;
+      }
+      teamMutationVersionRef.current += 1;
       setTeams((currentTeams) => [
         ...currentTeams,
         { ...createdTeam, role: 'owner' },
       ]);
       setTeamName('');
+      if (loadInFlightRef.current) {
+        reloadQueuedRef.current = true;
+      }
     } catch (error: unknown) {
+      if (generation !== requestGenerationRef.current) {
+        return;
+      }
       setErrorMessage(error instanceof Error ? error.message : '创建团队失败，请稍后重试');
     } finally {
-      setIsCreating(false);
+      if (generation === requestGenerationRef.current) {
+        setIsCreating(false);
+      }
     }
   }
 
