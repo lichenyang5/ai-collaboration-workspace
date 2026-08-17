@@ -590,6 +590,7 @@ transports: ['websocket']
 
 - 页面来源与 `CORS_ORIGIN` 精确一致，包括协议、域名和端口；
 - `VITE_API_BASE_URL` 指向同一套 API；
+- API 使用稳定且保密的 `JWT_SECRET` 签发和验证登录 token；
 - HTTPS 页面建立的是兼容的 WSS 连接；
 - 反向代理允许 WebSocket Upgrade，并正确转发 Cookie 与 Origin。
 
@@ -610,14 +611,192 @@ transports: ['websocket']
 
 测试需要分别证明纯逻辑、真实握手、页面交互和最终人工效果。
 
+### 11.1 为什么一个“能连上”的测试不够
+
+实时功能跨越数据库、REST、Socket.IO、Cookie、React Context 和页面请求。只测其中一层，很容易得到虚假的安全感。例如：
+
+- mock Gateway 通过，不代表真实 Socket.IO 握手会带上正确 Cookie；
+- Provider 能收到假事件，不代表服务端只发给 Bob；
+- 团队列表最终正确，不代表旧请求不会在特殊时序下覆盖它；
+- 自动化测试全绿，也不代表本机两个浏览器的 Origin、Cookie 和端口配置正确。
+
+因此当前项目把测试拆成几层。
+
+### 11.2 后端测试分别证明什么
+
+**鉴权服务测试**覆盖：
+
+- 能从混合 Cookie 字符串中读取 `access_token`；
+- Cookie 缺失、空字符串或只有其他 Cookie 时拒绝；
+- JWT payload 缺少 `sub` 或 `email` 时拒绝；
+- `verifyAsync` 因签名或过期失败时拒绝。
+
+**Gateway 单元测试**覆盖：认证成功后只加入 `user:user-2`、认证失败时不加入任何房间，以及 `emitToUser` 只选择目标用户房间。
+
+更重要的是，项目还有真实 `socket.io-client` 集成测试。测试启动一个临时 Nest HTTP Server，用 WebSocket transport 真正连接，然后检查：
+
+1. 合法 Origin + 有效 Cookie 可以连接并加入用户房间；
+2. 不同 Origin 被拒绝；
+3. 缺少 Origin 被拒绝；
+4. 合法 Origin 但缺少 Cookie 被拒绝；
+5. 合法 Origin 但 JWT 无效被拒绝。
+
+这比直接调用 `handleConnection()` 更接近浏览器实际握手。
+
+**通知器和团队服务测试**继续验证业务语义：新成员保存后恰好发布一次、已有成员不再保存也不通知、并发唯一约束冲突恢复后不重复通知、普通数据库错误原样抛出、通知发送异常不影响成员摘要返回。
+
+### 11.3 前端测试分别证明什么
+
+`RealtimeProvider.test.tsx` 用可控的 socket mock 验证：
+
+- 连接参数包含 `withCredentials` 和 `transports: ['websocket']`；
+- 同一个 `eventId` 只处理一次；
+- 正常首次连接不产生多余刷新；
+- 首次连接失败后恢复只刷新一次；
+- 断线重连只刷新一次；
+- 更换登录用户时旧回调、旧通知和旧版本不能污染新会话；
+- Provider 卸载时断开 socket。
+
+`RealtimeNotificationCenter.test.tsx` 验证通知文案、队列顺序、手动关闭、5 秒关闭、查看团队跳转，以及匿名状态下不挂载实时功能。
+
+`WorkspacePage.test.tsx` 则集中验证数据一致性：版本变化会重新加载、多个失效信号保持单个 GET 在途并最终追赶、失败保留原团队、下次成功清理错误、切换用户后忽略旧成功与旧失败、本地创建和旧 GET 竞争时不丢团队。
+
+### 11.4 如何运行以及当前证据
+
+在仓库根目录执行：
+
+```bash
+npm run test
+npm run build
+```
+
+本文写作前在隔离工作树重新运行了完整测试，结果为：
+
+```text
+API: 17 个 Test Suites 全部通过，90 个 Tests 全部通过
+Web: 8 个 Test Files 全部通过，89 个 Tests 全部通过
+```
+
+这组数字证明当前提交的自动化基线，但不能冒充浏览器人工验收。下节给出可执行的双浏览器步骤；是否在你的部署环境中真正看到 toast，仍要以浏览器 Network 和页面现象为准。
+
 ## 12. 双浏览器验证与常见故障排查
 
 一个普通窗口和一个无痕窗口，能够模拟两个完全独立的 Cookie 会话。
+
+### 12.1 从零验证完整效果
+
+先启动 PostgreSQL、API 和 Web，然后按以下步骤执行：
+
+1. 普通窗口打开 `http://localhost:5173`，登录团队负责人 Alice。
+2. 无痕窗口打开相同地址，登录已注册用户 Bob。
+3. 两个窗口都保持打开，确认 Console 没有持续的 WebSocket 连接错误。
+4. Alice 进入自己负责的团队，在成员区域输入 Bob 邮箱。
+5. 点击“邀请成员”。Alice 按钮应短暂显示“邀请中...”。
+6. 请求成功后，Alice 的输入框清空、按钮恢复，Bob 出现在成员列表。
+7. Bob 不刷新页面，右下角应出现“你已加入「团队名」”。
+8. 如果 Bob 正停留在工作区，新团队卡片应自动出现；如果在其他页面，返回工作区后应出现。
+9. Bob 点击“查看团队”，应进入 `/teams/:teamId/projects` 并看到团队项目。
+10. Alice 再次邀请同一个 Bob，Alice 仍得到已有成员结果，但 Bob 不应收到第二条 toast。
+
+在 DevTools Network 中，正常证据链应是：
+
+```text
+Alice: POST /api/teams/:teamId/members -> 2xx
+Bob:   WebSocket Frame: team.membership.created
+Bob:   GET /api/teams -> 2xx，响应包含新团队
+```
+
+如果 Bob 在邀请发生时离线，预期不是上线后补发 toast。正确行为是 Bob 登录后通过初始 `GET /api/teams` 看见团队。这是“瞬时通知 + 权威快照”架构的正常边界。
+
+### 12.2 不要先猜，按证据定位
+
+| 现象 | 先检查什么 | 常见原因与处理 |
+| --- | --- | --- |
+| Alice 邀请成功，Bob 没有 toast | Bob Network 是否存在 WebSocket；Frames 是否有 `team.membership.created` | Socket 未连接、Bob 邀请时离线或事件未到；先查连接和 API 日志，不要先改 React |
+| WebSocket 握手被拒绝 | 请求头 `Origin` 与 API 的 `CORS_ORIGIN` | 协议、域名或端口任一不同都会失败；统一实际 Web 地址并重启 API |
+| 显示 `Unauthorized` / 连接持续 `connect_error` | 握手 Request Headers 是否携带 `access_token` Cookie | Bob 未登录、Cookie 过期，或 `VITE_API_BASE_URL` 指错环境；重新登录并核对 API 地址 |
+| toast 出现但团队卡片不更新 | Bob 是否随后请求 `GET /api/teams`，状态码和响应是什么 | REST 回源失败；页面应提示“实时同步失败”，根据响应修复认证或 API，而不是把事件硬塞进团队列表 |
+| Bob 收到重复 toast | 两条 Frame 的 `eventId` 是否相同；数据库是否存在重复关系 | 相同 ID 应被前端去重；不同 ID 要检查唯一约束和是否在恢复分支错误发布 |
+| Alice 一直显示“邀请中...” | Alice 的 POST 是否仍 Pending；是否切换过团队路由；响应后 Console 是否报错 | 先确认真实请求是否结束，再检查当前 invitation generation 的成功/失败/finally 路径 |
+| 页面或 API 端口无法启动 | 终端是否出现 `EADDRINUSE`，Network 连接到了哪个进程 | 旧开发服务占用 `3001` 或 `5173`；停止旧进程后用正确目录重新启动 |
+| HTTPS 页面实时连接失败 | Network 中连接是否为 WSS，代理是否返回 `101 Switching Protocols` | 反向代理未转发 Upgrade、证书/协议不匹配，或生产 Origin 未配置 |
+
+### 12.3 一个实用的排查顺序
+
+遇到问题时，我建议固定按这条链路走：
+
+```text
+POST 是否成功
+  -> 数据库是否已有 team_members
+  -> API 是否执行 notify
+  -> Bob WebSocket 是否在线且在正确用户房间
+  -> Frame 是否到达
+  -> teamRefreshVersion 是否变化
+  -> GET /api/teams 是否成功
+  -> React 是否采用了当前响应
+```
+
+从左到右查，可以很快判断问题在写入、传输还是展示层。只盯着“页面没变化”修改 CSS 或 `setState`，通常会绕远路。
 
 ## 13. 面试时怎么讲：一分钟版与三分钟版
 
 实现完成以后，还需要把技术选择、难点和结果说清楚。
 
+### 13.1 一分钟版本
+
+> 我在一个 React + NestJS 的协作工作区里实现了实时团队邀请。原来的 REST 邀请只能更新发起者页面，被邀请用户必须刷新。我采用 Socket.IO 建立登录用户的私有连接，但没有让 WebSocket 承担业务数据：成员关系仍由 REST 和 PostgreSQL 写入，保存成功后服务端只向 `user:{userId}` 发布 `team.membership.created`，前端收到后显示通知并重新请求 `GET /api/teams`。实现中还处理了 Cookie/JWT 握手鉴权、Origin 校验、重复邀请幂等、断线重连补偿和用户切换时的旧回调污染。最后用真实 Socket.IO 握手测试和 React 页面竞态测试覆盖了关键链路。
+
+这一版要包含四个点：遇到了什么问题、架构怎么分工、最难的可靠性问题、如何证明。
+
+### 13.2 三分钟版本
+
+> 业务场景是 Alice 邀请 Bob 加入团队。单纯 REST 只能把结果返回 Alice，Bob 的浏览器不知道数据库变化。方案上我比较了轮询、SSE 和 WebSocket，最后选择 Socket.IO，因为项目是协作工作区，后续可能继续扩展实时事件。
+>
+> 后端使用 NestJS Gateway。浏览器握手必须匹配 `CORS_ORIGIN`，并携带 REST 登录时写入的 HttpOnly `access_token` Cookie。namespace middleware 验证 JWT 后，把服务端确认的用户 ID放进 `socket.data`，连接再加入 `user:{userId}` 私有房间。团队服务先检查负责人权限、目标用户和已有成员关系；新关系保存成功后才发送 `team.membership.created`。已有成员直接返回，两个并发插入由数据库唯一约束和 `23505` 恢复分支兜底，所以不会重复发布创建通知。通知器采用 best-effort，实时发送失败不会回滚已经成功的邀请。
+>
+> 前端只在恢复登录以后挂载 `RealtimeProvider`。事件按 `eventId` 去重，一份进入 toast 队列，一份通过 `teamRefreshVersion` 触发 `GET /api/teams`。这样事件只做失效通知，REST 仍是权威数据。Provider 以用户 ID作为 React key，解决账号切换时旧 socket 污染；首次连接失败后恢复和断线重连都会触发一次快照同步。工作区还用 single-flight、queued catch-up、用户 generation 和 mutation version 处理请求乱序。
+>
+> 测试上除了 Gateway 单测，我还用真实 `socket.io-client` 启动临时服务，覆盖正确/错误/缺失 Origin 和 Cookie；前端覆盖事件去重、重连、用户隔离、通知队列和团队列表竞态。最后用普通窗口与无痕窗口验证负责人和被邀请人的独立 Cookie 会话。
+
+### 13.3 面试官可能继续问什么
+
+**问：为什么不直接轮询？**
+
+答：轮询实现简单，如果业务只有一个低频变化，我会优先考虑它。但协作工作区存在继续扩展实时事件的可能，Socket.IO 的房间、连接生命周期和双向能力更合适。同时我没有把全部业务迁入 WebSocket，而是保留 REST 回源，控制了复杂度。
+
+**问：事件已经带了团队名称，为什么还要重新请求？**
+
+答：事件只代表“成员关系已创建”，不是完整团队快照。直接合并事件会让前端承担字段、排序、权限和漏事件恢复。重新请求能让刷新、重连和实时通知统一到同一权威来源，也更容易处理离线。
+
+**问：如果 API 部署多个实例怎么办？**
+
+答：当前房间在单进程内。多实例时 Alice 的 REST 请求和 Bob 的 socket 可能落到不同实例，需要 Socket.IO Redis Adapter 一类共享发布层；如果还要求数据库提交与事件可靠一致，则进一步引入 Outbox 和消息队列。当前 Demo 明确没有假装已经解决这些问题。
+
 ## 14. 总结
 
 实时协作的价值不在于页面多了一个弹窗，而在于不同用户看到的数据能够及时、可解释地重新对齐。
+
+回顾整个实现，最值得复用的不是某一段 Socket.IO API，而是几个设计原则：
+
+1. **先确认业务事实，再发送通知。** 没有成功落库，就不应该告诉用户成功。
+2. **实时事件负责失效，REST 快照负责真相。** 断线、重连和刷新都能回到同一条数据路径。
+3. **连接必须有服务端确认的身份。** Origin、Cookie、JWT 和用户房间缺一不可。
+4. **异步结果必须有归属。** generation、同步 pending ref 和 mutation version 都是在回答“这个结果还属于当前页面吗”。
+5. **测试要跨边界。** 既测函数，也测真实握手，还要测页面竞态；浏览器人工验收仍然不可省略。
+
+如果你刚开始学习 WebSocket，可以先只记住这条完整链路：
+
+```text
+登录建立私有连接
+-> REST 邀请并写数据库
+-> 保存成功后定向发事件
+-> 前端显示轻量通知
+-> REST 重新读取权威列表
+-> 断线或切换上下文时拒绝旧结果
+```
+
+当这条链路真正跑通以后，再扩展任务广播、在线状态或多实例消息系统，会比从一个“大而全”的实时框架开始更稳。
+
+完整代码与 Mac 启动说明在 GitHub：
+
+[https://github.com/lichenyang5/ai-collaboration-workspace](https://github.com/lichenyang5/ai-collaboration-workspace)
