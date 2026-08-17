@@ -40,6 +40,7 @@ function RealtimeSession({ children }: Pick<RealtimeProviderProps, 'children'>) 
     const socket: Socket<ServerToClientEvents, ClientToServerEvents> = io(apiBaseUrl, {
       withCredentials: true,
       autoConnect: true,
+      transports: ['websocket'],
     });
     let hasConnected = false;
     let initialConnectionFailed = false;

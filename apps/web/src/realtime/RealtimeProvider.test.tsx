@@ -107,6 +107,7 @@ describe('RealtimeProvider', () => {
     expect(io).toHaveBeenCalledWith(apiBaseUrl, {
       withCredentials: true,
       autoConnect: true,
+      transports: ['websocket'],
     });
 
     const handlers = socketState.sockets[0].handlers;
