@@ -153,12 +153,13 @@ sequenceDiagram
     DB-->>API: 返回已持久化成员
     API->>Socket: 发布 team.membership.created
     Socket-->>Bob: 仅向 user:{bobId} 推送事件
+    Bob->>Bob: 立即显示邀请通知
     API-->>Alice: 返回成员摘要
     Bob->>API: GET /api/teams
     API->>DB: 查询 Bob 的团队关系
     DB-->>API: 返回最新团队列表
     API-->>Bob: 返回包含新团队的数据
-    Bob->>Bob: 更新团队卡片并显示通知
+    Bob->>Bob: 更新团队卡片
 ```
 
 按时间顺序理解这张图：
@@ -272,7 +273,7 @@ notifyTeamMembershipCreated(userId, payload): void {
 }
 ```
 
-这样团队服务只表达“通知某个用户成员关系已创建”，不用知道房间格式和 Socket.IO API。通知失败会记录错误，但不会把已经成功的数据库写入反向变成邀请失败。因为成员关系才是业务事实，toast 只是即时体验。
+这样团队服务只表达“通知某个用户成员关系已创建”，不用知道房间格式和 Socket.IO API。`try/catch` 能记录 `emitToUser()` 同步抛出的调用异常，但 Socket.IO 向空房间发送、用户离线或消息在网络途中丢失，通常不会让 `emit()` 抛错。当前事件没有 ACK，因此服务端并不能确认 Bob 实际收到。无论如何，成员关系不会因为实时层问题而回滚：成员关系才是业务事实，toast 只是即时体验，最终数据仍靠 REST 恢复。
 
 ## 7. 邀请写入与幂等：为什么重复邀请不会重复通知
 
@@ -358,7 +359,7 @@ throw error;
 
 ### 8.1 只在登录后创建连接
 
-`App` 启动时先通过 `GET /api/auth/me` 恢复登录状态。没有有效用户时，只渲染登录相关路由；确认 `currentUser` 后，才挂载实时 Provider：
+`App` 启动时先通过 `GET /api/auth/me` 恢复登录状态。没有有效用户时不挂载实时 Provider；整组路由仍然存在，但受保护路由会跳转到登录页。确认 `currentUser` 后，才挂载实时 Provider：
 
 ```tsx
 if (!currentUser) return routes;
@@ -383,7 +384,9 @@ const socket = io(apiBaseUrl, {
 });
 ```
 
-`apiBaseUrl` 来自 `VITE_API_BASE_URL`，开发环境默认是 `http://localhost:3001`。`withCredentials` 让浏览器握手携带登录 Cookie；`autoConnect` 在 effect 创建 socket 后立即连接；`transports` 明确只使用 WebSocket。
+`apiBaseUrl` 来自 `VITE_API_BASE_URL`，开发环境默认是 `http://localhost:3001`。`autoConnect` 在 effect 创建 socket 后立即连接，`transports` 明确只使用 WebSocket。
+
+这里需要精确理解 `withCredentials`：它会影响 Engine.IO 的 polling/XHR/fetch 等凭据化请求，在 Node 客户端也参与 Cookie Jar 行为；但当前浏览器走的是纯 WebSocket transport，底层直接调用浏览器 `WebSocket` 构造器。WebSocket 握手是否携带 Cookie，由浏览器根据 Cookie 的 Domain、Path、SameSite、Secure 等属性决定，不能靠 `withCredentials: true` 绕过这些规则。代码保留该选项并不等于它是当前纯 WebSocket Cookie 的开关。
 
 ### 8.2 事件进入 Provider 后发生什么
 
@@ -566,7 +569,7 @@ WebSocket 是长连接，但它并不会自动继承 REST 端所有安全保证�
 | 层次 | 当前措施 | 解决的问题 |
 | --- | --- | --- |
 | 浏览器来源 | `Origin === CORS_ORIGIN` | 拒绝非预期网页发起实时连接 |
-| Cookie 传递 | 客户端 `withCredentials: true` | 让握手携带现有登录凭据 |
+| Cookie 传递 | 浏览器的 Domain、Path、SameSite、Secure 规则 | 决定 WebSocket 握手是否携带现有登录凭据 |
 | 用户身份 | 服务端验证 `access_token` JWT | 确认连接对应哪个用户 |
 | 消息目标 | 服务端加入 `user:{userId}` | 只向被邀请用户的连接发送 |
 
@@ -593,6 +596,8 @@ transports: ['websocket']
 - API 使用稳定且保密的 `JWT_SECRET` 签发和验证登录 token；
 - HTTPS 页面建立的是兼容的 WSS 连接；
 - 反向代理允许 WebSocket Upgrade，并正确转发 Cookie 与 Origin。
+
+当前 Cookie 是 `sameSite: 'lax'`，因此 Web 与 API 需要保持 same-site；本地 `localhost` 的不同端口仍属于 same-site。若生产环境把前端和 API 放在不同站点，浏览器可能不会在 WebSocket 握手中发送该 Cookie，`withCredentials` 也不能越过 SameSite 限制，需要重新设计 Cookie 属性与安全策略。
 
 本地默认值是 Web `http://localhost:5173`、API `http://localhost:3001`。如果浏览器实际打开 `http://127.0.0.1:5173`，它与 `http://localhost:5173` 是不同 Origin，也会被拒绝。
 
@@ -643,7 +648,7 @@ transports: ['websocket']
 
 这比直接调用 `handleConnection()` 更接近浏览器实际握手。
 
-**通知器和团队服务测试**继续验证业务语义：新成员保存后恰好发布一次、已有成员不再保存也不通知、并发唯一约束冲突恢复后不重复通知、普通数据库错误原样抛出、通知发送异常不影响成员摘要返回。
+**通知器和团队服务测试**继续验证业务语义：新成员保存后恰好发布一次、已有成员不再保存也不通知、并发唯一约束冲突恢复后不重复通知、普通数据库错误原样抛出，以及模拟 `emitToUser()` 同步抛错时仍返回成员摘要。由于没有 ACK，这些测试不声称能确认客户端实际送达。
 
 ### 11.3 前端测试分别证明什么
 
@@ -752,11 +757,11 @@ POST 是否成功
 
 > 业务场景是 Alice 邀请 Bob 加入团队。单纯 REST 只能把结果返回 Alice，Bob 的浏览器不知道数据库变化。方案上我比较了轮询、SSE 和 WebSocket，最后选择 Socket.IO，因为项目是协作工作区，后续可能继续扩展实时事件。
 >
-> 后端使用 NestJS Gateway。浏览器握手必须匹配 `CORS_ORIGIN`，并携带 REST 登录时写入的 HttpOnly `access_token` Cookie。namespace middleware 验证 JWT 后，把服务端确认的用户 ID放进 `socket.data`，连接再加入 `user:{userId}` 私有房间。团队服务先检查负责人权限、目标用户和已有成员关系；新关系保存成功后才发送 `team.membership.created`。已有成员直接返回，两个并发插入由数据库唯一约束和 `23505` 恢复分支兜底，所以不会重复发布创建通知。通知器采用 best-effort，实时发送失败不会回滚已经成功的邀请。
+> 后端使用 NestJS Gateway。浏览器握手必须匹配 `CORS_ORIGIN`，并携带 REST 登录时写入的 HttpOnly `access_token` Cookie。namespace middleware 验证 JWT 后，把服务端确认的用户 ID 放进 `socket.data`，连接再加入 `user:{userId}` 私有房间。团队服务先检查负责人权限、目标用户和已有成员关系；新关系保存成功后才发送 `team.membership.created`。已有成员直接返回，两个并发插入由数据库唯一约束和 `23505` 恢复分支兜底，所以不会重复发布创建通知。通知器采用 best-effort，实时发送调用失败不会回滚已经成功的邀请，但当前没有 ACK 来确认送达。
 >
-> 前端只在恢复登录以后挂载 `RealtimeProvider`。事件按 `eventId` 去重，一份进入 toast 队列，一份通过 `teamRefreshVersion` 触发 `GET /api/teams`。这样事件只做失效通知，REST 仍是权威数据。Provider 以用户 ID作为 React key，解决账号切换时旧 socket 污染；首次连接失败后恢复和断线重连都会触发一次快照同步。工作区还用 single-flight、queued catch-up、用户 generation 和 mutation version 处理请求乱序。
+> 前端只在恢复登录以后挂载 `RealtimeProvider`。事件按 `eventId` 去重，一份进入 toast 队列，一份通过 `teamRefreshVersion` 触发 `GET /api/teams`。这样事件只做失效通知，REST 仍是权威数据。Provider 以用户 ID 作为 React key，解决账号切换时旧 socket 污染；首次连接失败后恢复和断线重连都会触发一次快照同步。工作区还用 single-flight、queued catch-up、用户 generation 和 mutation version 处理请求乱序。
 >
-> 测试上除了 Gateway 单测，我还用真实 `socket.io-client` 启动临时服务，覆盖正确/错误/缺失 Origin 和 Cookie；前端覆盖事件去重、重连、用户隔离、通知队列和团队列表竞态。最后用普通窗口与无痕窗口验证负责人和被邀请人的独立 Cookie 会话。
+> 测试上除了 Gateway 单测，我还用真实 `socket.io-client` 启动临时服务，覆盖正确/错误/缺失 Origin 和 Cookie；前端覆盖事件去重、重连、用户隔离、通知队列和团队列表竞态。最后还需要按文中的步骤，用普通窗口与无痕窗口人工验证负责人和被邀请人的独立 Cookie 会话；本次写作没有把这一步描述成已经观察到的结果。
 
 ### 13.3 面试官可能继续问什么
 
