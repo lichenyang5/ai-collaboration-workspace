@@ -23,7 +23,9 @@ export function WorkspacePage({ user, onLogout }: WorkspacePageProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
+  const [loadErrorMessage, setLoadErrorMessage] = useState('');
+  const [createErrorMessage, setCreateErrorMessage] = useState('');
+  const errorMessage = createErrorMessage || loadErrorMessage;
   const loadInFlightRef = useRef(false);
   const reloadQueuedRef = useRef(false);
   const requestGenerationRef = useRef(0);
@@ -57,12 +59,12 @@ export function WorkspacePage({ user, onLogout }: WorkspacePageProps) {
           } else {
             reloadQueuedRef.current = true;
           }
-          setErrorMessage('');
+          setLoadErrorMessage('');
         } catch (error: unknown) {
           if (generation !== requestGenerationRef.current) {
             return;
           }
-          setErrorMessage(
+          setLoadErrorMessage(
             isInitialLoad
               ? error instanceof Error
                 ? error.message
@@ -95,7 +97,8 @@ export function WorkspacePage({ user, onLogout }: WorkspacePageProps) {
     lastRefreshVersionRef.current = teamRefreshVersion;
     teamMutationVersionRef.current = 0;
     setTeams([]);
-    setErrorMessage('');
+    setLoadErrorMessage('');
+    setCreateErrorMessage('');
     setIsLoading(true);
     setIsCreating(false);
 
@@ -124,7 +127,8 @@ export function WorkspacePage({ user, onLogout }: WorkspacePageProps) {
       return;
     }
 
-    setErrorMessage('');
+    setLoadErrorMessage('');
+    setCreateErrorMessage('');
     setIsCreating(true);
     const generation = requestGenerationRef.current;
     try {
@@ -137,19 +141,23 @@ export function WorkspacePage({ user, onLogout }: WorkspacePageProps) {
         return;
       }
       teamMutationVersionRef.current += 1;
-      setTeams((currentTeams) => [
-        ...currentTeams,
-        { ...createdTeam, role: 'owner' },
-      ]);
+      setTeams((currentTeams) => {
+        const createdTeamSummary: TeamSummary = { ...createdTeam, role: 'owner' };
+        const existingTeamIndex = currentTeams.findIndex((team) => team.id === createdTeam.id);
+        if (existingTeamIndex === -1) {
+          return [...currentTeams, createdTeamSummary];
+        }
+        return currentTeams.map((team, index) =>
+          index === existingTeamIndex ? createdTeamSummary : team,
+        );
+      });
       setTeamName('');
-      if (loadInFlightRef.current) {
-        reloadQueuedRef.current = true;
-      }
+      void loadTeams(generation);
     } catch (error: unknown) {
       if (generation !== requestGenerationRef.current) {
         return;
       }
-      setErrorMessage(error instanceof Error ? error.message : '创建团队失败，请稍后重试');
+      setCreateErrorMessage(error instanceof Error ? error.message : '创建团队失败，请稍后重试');
     } finally {
       if (generation === requestGenerationRef.current) {
         setIsCreating(false);

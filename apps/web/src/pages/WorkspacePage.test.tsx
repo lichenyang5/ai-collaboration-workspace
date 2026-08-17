@@ -174,6 +174,115 @@ describe('WorkspacePage', () => {
     expect(screen.queryByText('旧团队')).not.toBeInTheDocument();
   });
 
+  it('keeps a newer create error when an in-flight realtime GET succeeds', async () => {
+    const pendingRefresh = deferred<Response>();
+    const pendingCreate = deferred<Response>();
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return pendingCreate.promise;
+      }
+      if (fetchMock.mock.calls.length === 1) {
+        return Promise.resolve(teamsResponse([{ id: 'team-1', name: '旧团队', role: 'owner' }]));
+      }
+      return pendingRefresh.promise;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const rendered = renderWorkspace();
+    const user = userEvent.setup();
+    await screen.findByText('旧团队');
+
+    realtimeState.teamRefreshVersion = 1;
+    rendered.rerender(<MemoryRouter><WorkspacePage user={userOne} onLogout={vi.fn()} /></MemoryRouter>);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await user.type(screen.getByLabelText('团队名称'), '失败团队');
+    await user.click(screen.getByRole('button', { name: '创建团队' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    await act(async () => {
+      pendingCreate.reject(new Error('创建请求失败'));
+    });
+    expect(await screen.findByRole('alert')).toHaveTextContent('创建请求失败');
+
+    await act(async () => {
+      pendingRefresh.resolve(teamsResponse([{ id: 'team-1', name: '旧团队', role: 'owner' }]));
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('创建请求失败');
+  });
+
+  it('keeps a newer create error when an in-flight realtime GET fails', async () => {
+    const pendingRefresh = deferred<Response>();
+    const pendingCreate = deferred<Response>();
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return pendingCreate.promise;
+      }
+      if (fetchMock.mock.calls.length === 1) {
+        return Promise.resolve(teamsResponse([{ id: 'team-1', name: '旧团队', role: 'owner' }]));
+      }
+      return pendingRefresh.promise;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const rendered = renderWorkspace();
+    const user = userEvent.setup();
+    await screen.findByText('旧团队');
+
+    realtimeState.teamRefreshVersion = 1;
+    rendered.rerender(<MemoryRouter><WorkspacePage user={userOne} onLogout={vi.fn()} /></MemoryRouter>);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await user.type(screen.getByLabelText('团队名称'), '失败团队');
+    await user.click(screen.getByRole('button', { name: '创建团队' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    await act(async () => {
+      pendingCreate.reject(new Error('创建请求失败'));
+    });
+    expect(await screen.findByRole('alert')).toHaveTextContent('创建请求失败');
+
+    await act(async () => {
+      pendingRefresh.reject(new Error('realtime failed'));
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('创建请求失败');
+  });
+
+  it('clears a previous realtime error when a new create attempt starts', async () => {
+    const pendingCreate = deferred<Response>();
+    let getCount = 0;
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return pendingCreate.promise;
+      }
+      getCount += 1;
+      if (getCount === 1) {
+        return Promise.resolve(teamsResponse([{ id: 'team-1', name: '旧团队', role: 'owner' }]));
+      }
+      if (getCount === 2) {
+        return Promise.reject(new Error('realtime failed'));
+      }
+      return Promise.resolve(teamsResponse([
+        { id: 'team-1', name: '旧团队', role: 'owner' },
+        { id: 'team-2', name: '恢复创建团队', role: 'owner' },
+      ]));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const rendered = renderWorkspace();
+    const user = userEvent.setup();
+    await screen.findByText('旧团队');
+
+    realtimeState.teamRefreshVersion = 1;
+    rendered.rerender(<MemoryRouter><WorkspacePage user={userOne} onLogout={vi.fn()} /></MemoryRouter>);
+    expect(await screen.findByRole('alert')).toHaveTextContent('实时同步失败，可刷新页面重试');
+
+    await user.type(screen.getByLabelText('团队名称'), '恢复创建团队');
+    await user.click(screen.getByRole('button', { name: '创建团队' }));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    await act(async () => {
+      pendingCreate.resolve(new Response(
+        JSON.stringify({ id: 'team-2', name: '恢复创建团队' }),
+        { status: 201, headers: { 'Content-Type': 'application/json' } },
+      ));
+    });
+    expect(await screen.findByText('恢复创建团队')).toBeInTheDocument();
+  });
+
   it('ignores an obsolete successful GET after the user changes', async () => {
     const oldUserLoad = deferred<Response>();
     const newUserLoad = deferred<Response>();
@@ -261,16 +370,71 @@ describe('WorkspacePage', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it('upserts a delayed create response and always reconciles after a newer GET already finished', async () => {
+    const pendingCreate = deferred<Response>();
+    const realtimeRefresh = deferred<Response>();
+    const finalRefresh = deferred<Response>();
+    let getCount = 0;
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return pendingCreate.promise;
+      }
+      getCount += 1;
+      if (getCount === 1) {
+        return Promise.resolve(teamsResponse([]));
+      }
+      if (getCount === 2) {
+        return realtimeRefresh.promise;
+      }
+      return finalRefresh.promise;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const rendered = renderWorkspace();
+    const user = userEvent.setup();
+    await screen.findByText('还没有团队，下一步可以创建你的第一个团队。');
+
+    await user.type(screen.getByLabelText('团队名称'), '设计协作组');
+    await user.click(screen.getByRole('button', { name: '创建团队' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    realtimeState.teamRefreshVersion = 1;
+    rendered.rerender(<MemoryRouter><WorkspacePage user={userOne} onLogout={vi.fn()} /></MemoryRouter>);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+
+    await act(async () => {
+      realtimeRefresh.resolve(teamsResponse([{ id: 'team-2', name: '设计协作组', role: 'owner' }]));
+    });
+    expect(await screen.findAllByText('设计协作组')).toHaveLength(1);
+
+    await act(async () => {
+      pendingCreate.resolve(new Response(
+        JSON.stringify({ id: 'team-2', name: '设计协作组' }),
+        { status: 201, headers: { 'Content-Type': 'application/json' } },
+      ));
+    });
+    expect(screen.getAllByText('设计协作组')).toHaveLength(1);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+
+    await act(async () => {
+      finalRefresh.resolve(teamsResponse([{ id: 'team-2', name: '服务器权威团队', role: 'owner' }]));
+    });
+    expect(await screen.findByText('服务器权威团队')).toBeInTheDocument();
+    expect(screen.queryByText('设计协作组')).not.toBeInTheDocument();
+  });
+
   it('creates a team and adds it to the current list', async () => {
+    let hasCreatedTeam = false;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/api/teams') && init?.method === 'POST') {
+        hasCreatedTeam = true;
         return new Response(
           JSON.stringify({ id: 'team-2', name: '设计协作组' }),
           { status: 201, headers: { 'Content-Type': 'application/json' } },
         );
       }
-      return teamsResponse([]);
+      return teamsResponse(hasCreatedTeam
+        ? [{ id: 'team-2', name: '设计协作组', role: 'owner' }]
+        : []);
     });
     vi.stubGlobal('fetch', fetchMock);
     const user = userEvent.setup();
