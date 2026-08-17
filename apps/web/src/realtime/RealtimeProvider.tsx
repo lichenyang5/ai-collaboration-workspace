@@ -42,6 +42,7 @@ function RealtimeSession({ children }: Pick<RealtimeProviderProps, 'children'>) 
       autoConnect: true,
     });
     let hasConnected = false;
+    let initialConnectionFailed = false;
     let reconnecting = false;
 
     const handleMembershipCreated = (event: TeamMembershipCreatedEvent) => {
@@ -55,12 +56,21 @@ function RealtimeSession({ children }: Pick<RealtimeProviderProps, 'children'>) 
       if (generation !== generationRef.current) return;
       if (!hasConnected) {
         hasConnected = true;
+        if (initialConnectionFailed) {
+          initialConnectionFailed = false;
+          setTeamRefreshVersion((current) => current + 1);
+        }
         return;
       }
       if (reconnecting) {
         reconnecting = false;
         setTeamRefreshVersion((current) => current + 1);
       }
+    };
+
+    const handleConnectError = () => {
+      if (generation !== generationRef.current || hasConnected) return;
+      initialConnectionFailed = true;
     };
 
     const handleDisconnect = () => {
@@ -70,12 +80,14 @@ function RealtimeSession({ children }: Pick<RealtimeProviderProps, 'children'>) 
 
     socket.on(TEAM_MEMBERSHIP_CREATED, handleMembershipCreated);
     socket.on('connect', handleConnect);
+    socket.on('connect_error', handleConnectError);
     socket.on('disconnect', handleDisconnect);
 
     return () => {
       generationRef.current += 1;
       socket.off(TEAM_MEMBERSHIP_CREATED, handleMembershipCreated);
       socket.off('connect', handleConnect);
+      socket.off('connect_error', handleConnectError);
       socket.off('disconnect', handleDisconnect);
       socket.disconnect();
     };

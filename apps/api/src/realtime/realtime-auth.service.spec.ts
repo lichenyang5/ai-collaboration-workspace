@@ -46,4 +46,12 @@ describe('RealtimeAuthService', () => {
       '登录状态已失效',
     );
   });
+
+  it('rejects a token when asynchronous JWT verification fails', async () => {
+    jwtService.verifyAsync.mockRejectedValue(new Error('invalid signature'));
+
+    await expect(service.authenticate('access_token=invalid.jwt')).rejects.toThrow(
+      '登录状态已失效',
+    );
+  });
 });

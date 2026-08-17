@@ -4,7 +4,7 @@ export interface TeamMembershipCreatedEvent {
   eventId: string;
   teamId: string;
   teamName: string;
-  role: 'owner' | 'member';
+  role: 'member';
   occurredAt: string;
 }
 

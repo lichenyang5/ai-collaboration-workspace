@@ -13,23 +13,35 @@ describe('RealtimeGateway', () => {
   };
   let gateway: RealtimeGateway;
   let authService: jest.Mocked<Pick<RealtimeAuthService, 'authenticate'>>;
-  let client: jest.Mocked<Pick<Socket, 'join' | 'disconnect' | 'handshake'>>;
+  let client: jest.Mocked<
+    Pick<Socket, 'join' | 'disconnect' | 'handshake' | 'data'>
+  >;
+  let middleware: (
+    client: Socket,
+    next: (error?: Error) => void,
+  ) => void | Promise<void>;
   let emit: jest.Mock;
-  let server: jest.Mocked<Pick<Server, 'to'>>;
+  let server: jest.Mocked<Pick<Server, 'to' | 'use'>>;
 
   beforeEach(() => {
     authService = { authenticate: jest.fn() };
     client = {
       handshake: { headers: { cookie: 'access_token=valid.jwt' } },
+      data: {},
       join: jest.fn(),
       disconnect: jest.fn(),
     };
     emit = jest.fn();
     server = {
       to: jest.fn().mockReturnValue({ emit }),
+      use: jest.fn((registeredMiddleware) => {
+        middleware = registeredMiddleware;
+        return server as Server;
+      }),
     };
     gateway = new RealtimeGateway(authService as RealtimeAuthService);
     gateway.server = server as Server;
+    gateway.afterInit(server as Server);
   });
 
   it('joins only the authenticated user room', async () => {
@@ -38,19 +50,25 @@ describe('RealtimeGateway', () => {
       email: 'b@example.com',
     });
 
+    const next = jest.fn();
+    await middleware(client as Socket, next);
     await gateway.handleConnection(client as Socket);
 
+    expect(next).toHaveBeenCalledWith();
+    expect(authService.authenticate).toHaveBeenCalledTimes(1);
     expect(client.join).toHaveBeenCalledWith('user:user-2');
     expect(client.disconnect).not.toHaveBeenCalled();
   });
 
-  it('disconnects an unauthorized socket without joining a room', async () => {
+  it('rejects an unauthorized socket before joining a room', async () => {
     authService.authenticate.mockRejectedValue(new Error('invalid'));
+    const next = jest.fn();
 
-    await gateway.handleConnection(client as Socket);
+    await middleware(client as Socket, next);
 
+    expect(next).toHaveBeenCalledWith(expect.any(Error));
     expect(client.join).not.toHaveBeenCalled();
-    expect(client.disconnect).toHaveBeenCalledWith(true);
+    expect(client.disconnect).not.toHaveBeenCalled();
   });
 
   it('targets only the requested user room', () => {

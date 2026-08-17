@@ -6,19 +6,14 @@ import { io } from 'socket.io-client';
 import { RealtimeProvider, useRealtime } from './RealtimeProvider';
 import { apiBaseUrl } from '../services/api';
 import type { PublicUser } from '../types/auth';
-import type { RealtimeContextValue } from './realtime-types';
+import type {
+  RealtimeContextValue,
+  TeamMembershipCreatedEvent,
+} from './realtime-types';
 
 const TEAM_MEMBERSHIP_CREATED = 'team.membership.created';
 
-interface MembershipCreatedEvent {
-  eventId: string;
-  teamId: string;
-  teamName: string;
-  role: 'owner' | 'member';
-  occurredAt: string;
-}
-
-type SocketHandler = (event?: MembershipCreatedEvent) => void;
+type SocketHandler = (event?: TeamMembershipCreatedEvent | Error) => void;
 
 interface SocketMock {
   handlers: Map<string, SocketHandler>;
@@ -63,7 +58,7 @@ const userTwo: PublicUser = {
   displayName: 'User Two',
 };
 
-const event: MembershipCreatedEvent = {
+const event: TeamMembershipCreatedEvent = {
   eventId: 'event-1',
   teamId: 'team-1',
   teamName: 'Realtime Team',
@@ -136,6 +131,22 @@ describe('RealtimeProvider', () => {
     expect(screen.getByTestId('team-refresh-version')).toHaveTextContent('1');
   });
 
+  it('refreshes once when the first connection succeeds after an initial error', () => {
+    renderProvider(userOne);
+
+    const socket = socketState.sockets[0];
+    act(() => registeredHandler(socket, 'connect_error')(new Error('offline')));
+    act(() => registeredHandler(socket, 'connect')());
+    expect(screen.getByTestId('team-refresh-version')).toHaveTextContent('1');
+
+    act(() => registeredHandler(socket, 'connect')());
+    expect(screen.getByTestId('team-refresh-version')).toHaveTextContent('1');
+
+    act(() => registeredHandler(socket, 'disconnect')());
+    act(() => registeredHandler(socket, 'connect')());
+    expect(screen.getByTestId('team-refresh-version')).toHaveTextContent('2');
+  });
+
   it('isolates callbacks and state when the authenticated user changes', () => {
     const rendered = renderProvider(userOne);
     const oldSocket = socketState.sockets[0];
@@ -192,9 +203,11 @@ describe('RealtimeProvider', () => {
   it('disconnects the socket when unmounted', () => {
     const rendered = renderProvider(userOne);
     const socket = socketState.sockets[0];
+    const connectErrorHandler = registeredHandler(socket, 'connect_error');
 
     rendered.unmount();
 
+    expect(socket.off).toHaveBeenCalledWith('connect_error', connectErrorHandler);
     expect(socket.disconnect).toHaveBeenCalledOnce();
   });
 });

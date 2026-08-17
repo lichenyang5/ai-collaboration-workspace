@@ -81,6 +81,7 @@ describe('TeamsService addTeamMember', () => {
     });
     expect(memberRepository.create).toHaveBeenCalledTimes(1);
     expect(memberRepository.save).toHaveBeenCalledTimes(1);
+    expect(notifier.notifyTeamMembershipCreated).toHaveBeenCalledTimes(1);
     expect(notifier.notifyTeamMembershipCreated).toHaveBeenCalledWith(
       'member-user-2',
       {
