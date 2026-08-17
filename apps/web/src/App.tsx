@@ -6,6 +6,8 @@ import { ProjectListPage } from './pages/ProjectListPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { TaskBoardPage } from './pages/TaskBoardPage';
 import { WorkspacePage } from './pages/WorkspacePage';
+import { RealtimeNotificationCenter } from './realtime/RealtimeNotificationCenter';
+import { RealtimeProvider } from './realtime/RealtimeProvider';
 import { apiRequest } from './services/api';
 import type { PublicUser } from './types/auth';
 
@@ -41,7 +43,7 @@ function AppRoutes() {
     return <main className="app-loading">正在恢复登录状态…</main>;
   }
 
-  return (
+  const routes = (
     <Routes>
       <Route
         path="/login"
@@ -75,6 +77,17 @@ function AppRoutes() {
       />
       <Route path="*" element={<Navigate to="/workspace" replace />} />
     </Routes>
+  );
+
+  if (!currentUser) {
+    return routes;
+  }
+
+  return (
+    <RealtimeProvider user={currentUser}>
+      <RealtimeNotificationCenter />
+      {routes}
+    </RealtimeProvider>
   );
 }
 
