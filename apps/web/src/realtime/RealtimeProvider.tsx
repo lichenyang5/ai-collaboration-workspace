@@ -19,6 +19,10 @@ interface RealtimeProviderProps {
 const RealtimeContext = createContext<RealtimeContextValue | undefined>(undefined);
 
 export function RealtimeProvider({ user, children }: RealtimeProviderProps) {
+  return <RealtimeSession key={user.id}>{children}</RealtimeSession>;
+}
+
+function RealtimeSession({ children }: Pick<RealtimeProviderProps, 'children'>) {
   const [notifications, setNotifications] = useState<TeamMembershipCreatedEvent[]>([]);
   const [teamRefreshVersion, setTeamRefreshVersion] = useState(0);
   const generationRef = useRef(0);
@@ -32,8 +36,6 @@ export function RealtimeProvider({ user, children }: RealtimeProviderProps) {
     const generation = generationRef.current + 1;
     generationRef.current = generation;
     seenEventIds.current = new Set();
-    setNotifications([]);
-    setTeamRefreshVersion(0);
 
     const socket: Socket<ServerToClientEvents, ClientToServerEvents> = io(apiBaseUrl, {
       withCredentials: true,
@@ -77,7 +79,7 @@ export function RealtimeProvider({ user, children }: RealtimeProviderProps) {
       socket.off('disconnect', handleDisconnect);
       socket.disconnect();
     };
-  }, [user.id]);
+  }, []);
 
   return (
     <RealtimeContext.Provider value={{ notifications, dismissNotification, teamRefreshVersion }}>

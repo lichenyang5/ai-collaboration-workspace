@@ -1,10 +1,12 @@
 import { act, render, screen } from '@testing-library/react';
+import { useLayoutEffect } from 'react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { io } from 'socket.io-client';
 import { RealtimeProvider, useRealtime } from './RealtimeProvider';
 import { apiBaseUrl } from '../services/api';
 import type { PublicUser } from '../types/auth';
+import type { RealtimeContextValue } from './realtime-types';
 
 const TEAM_MEMBERSHIP_CREATED = 'team.membership.created';
 
@@ -69,13 +71,21 @@ const event: MembershipCreatedEvent = {
   occurredAt: '2026-08-14T00:00:00.000Z',
 };
 
-function RealtimeState() {
-  const { notifications, teamRefreshVersion } = useRealtime();
+interface RealtimeStateProps {
+  onSessionLayout?: (realtime: RealtimeContextValue) => void;
+}
+
+function RealtimeState({ onSessionLayout }: RealtimeStateProps) {
+  const realtime = useRealtime();
+
+  useLayoutEffect(() => {
+    onSessionLayout?.(realtime);
+  }, [onSessionLayout, realtime]);
 
   return (
     <>
-      <output data-testid="notification-count">{notifications.length}</output>
-      <output data-testid="team-refresh-version">{teamRefreshVersion}</output>
+      <output data-testid="notification-count">{realtime.notifications.length}</output>
+      <output data-testid="team-refresh-version">{realtime.teamRefreshVersion}</output>
     </>
   );
 }
@@ -146,6 +156,35 @@ describe('RealtimeProvider', () => {
     expect(screen.getByTestId('team-refresh-version')).toHaveTextContent('0');
 
     act(() => oldEventHandler({ ...event, eventId: 'event-from-user-one' }));
+    expect(screen.getByTestId('notification-count')).toHaveTextContent('0');
+    expect(screen.getByTestId('team-refresh-version')).toHaveTextContent('0');
+  });
+
+  it('starts the new user session empty during layout before old passive effects clean up', () => {
+    const rendered = renderProvider(userOne);
+    const oldSocket = socketState.sockets[0];
+    const oldEventHandler = registeredHandler(oldSocket, TEAM_MEMBERSHIP_CREATED);
+
+    act(() => oldEventHandler(event));
+
+    const newUserLayoutStates: Array<Pick<RealtimeContextValue, 'notifications' | 'teamRefreshVersion'>> = [];
+    rendered.rerender(
+      <RealtimeProvider user={userTwo}>
+        <RealtimeState
+          onSessionLayout={(realtime) => {
+            newUserLayoutStates.push({
+              notifications: realtime.notifications,
+              teamRefreshVersion: realtime.teamRefreshVersion,
+            });
+            oldEventHandler({ ...event, eventId: 'event-fired-during-user-switch' });
+          }}
+        />
+      </RealtimeProvider>,
+    );
+
+    expect(newUserLayoutStates).toHaveLength(1);
+    expect(newUserLayoutStates[0].notifications).toHaveLength(0);
+    expect(newUserLayoutStates[0].teamRefreshVersion).toBe(0);
     expect(screen.getByTestId('notification-count')).toHaveTextContent('0');
     expect(screen.getByTestId('team-refresh-version')).toHaveTextContent('0');
   });
