@@ -323,3 +323,22 @@ npm run test:seed --workspace @workspace/api
 ```
 
 该测试要求 `TEST_DATABASE_ADMIN_URL`，只会创建、重建并清理名称精确为 `ai_collaboration_workspace_seed_test` 的一次性数据库；它应用 `schema.sql` 与 migrations，两次执行 seed，并验证固定数据数量不增长以及非 Demo 数据未被删除。
+
+## 持续集成
+
+GitHub Actions 会在每次推送到 `main`、以及每个 Pull Request 时使用 Node.js 22 运行：
+
+```bash
+npm ci
+npm run test
+npm run build
+```
+
+该流程不读取数据库、JWT 或 SiliconFlow Key；它验证锁定依赖可以安装，API 与 Web 的自动化测试通过，且两个 workspace 都能完成生产构建。
+
+## 验收状态
+
+- 已按本文档完成本机数据库、Schema、migration 与可重复执行的 Demo seed 验收。
+- 已使用两个独立浏览器会话和不同账号完成真实团队邀请验收：受邀用户无需刷新即可收到通知，团队列表自动同步；重复邀请不会产生第二条创建通知。
+- 任务创建、编辑、状态流转、筛选、归档/恢复、活动记录与 AI 草稿确认均可按 [五分钟 Demo 脚本](docs/demo-script.md) 演示。
+- 本项目以本地可复现的全栈作品 Demo 交付，当前不提供线上部署地址。AI 任务拆解是可选增强，仍取决于本机配置的 SiliconFlow Key、模型可用性与账号额度。
