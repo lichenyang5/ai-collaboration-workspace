@@ -2,6 +2,10 @@
 
 面向小型团队的全栈协同任务系统，展示 React 前端交互、NestJS REST API、PostgreSQL 关系建模、团队权限控制和 SiliconFlow AI 任务拆解。
 
+# 演示视频
+
+https://www.bilibili.com/video/BV16F8B6QEmt/
+
 ## 已实现功能
 
 - 用户注册、登录、Cookie 会话恢复与退出登录
