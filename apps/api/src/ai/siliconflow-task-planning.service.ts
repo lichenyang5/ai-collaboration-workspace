@@ -52,7 +52,10 @@ export class SiliconFlowTaskPlanningService {
     let attempt = 0;
     while (true) {
       const abortController = new AbortController();
-      const timeoutId = setTimeout(() => abortController.abort(), REQUEST_TIMEOUT_MS);
+      const timeoutId = setTimeout(
+        () => abortController.abort(),
+        REQUEST_TIMEOUT_MS,
+      );
       let response: Response;
 
       try {
@@ -106,42 +109,26 @@ export class SiliconFlowTaskPlanningService {
 
       let rawBody: string;
       try {
-        console.log('[AI] BEFORE response.text()');
         rawBody = await response.text();
-        console.log('[AI] SiliconFlow raw body', { model, rawBody });
-        console.log('[AI] SiliconFlow raw body received', {
-          model,
-          status: response.status,
-          bodyLength: rawBody.length,
-        });
-      } catch (error) {
-        console.error('[AI] SiliconFlow body read failed', { model, error });
+      } catch {
         throw new BadGatewayException('AI 服务返回数据读取失败');
       }
 
       let payload: unknown;
       try {
         payload = JSON.parse(rawBody);
-      } catch (error) {
-        console.error('[AI] SiliconFlow outer JSON parse failed', {
-          model,
-          body: rawBody,
-          error,
-        });
+      } catch {
         throw new BadGatewayException('AI 服务返回的数据格式异常');
       }
 
-      console.log('[AI] SiliconFlow payload parsed', { model, payload });
-
       try {
         return this.parseTaskDrafts(payload);
-      } catch (parseErr) {
+      } catch {
         attempt++;
         if (attempt <= MAX_AI_RETRY) {
-          console.warn(`[AI] 任务JSON解析失败，开始重试 ${attempt}/${MAX_AI_RETRY}`);
           continue;
         }
-        throw parseErr;
+        throw new BadGatewayException('AI 服务暂时不可用');
       }
     }
   }
@@ -149,13 +136,12 @@ export class SiliconFlowTaskPlanningService {
   private parseTaskDrafts(payload: unknown): AiTaskDraft[] {
     const content = this.getMessageContent(payload);
 
-    let dirtyJson = content
+    const dirtyJson = content
       .trim()
       .replace(/^```(?:json)?\s*/i, '')
       .replace(/\s*```$/, '');
 
     const fixedJson = jsonrepair(dirtyJson);
-    console.log('[AI] jsonrepair修复后', fixedJson);
 
     const draftPayload = JSON.parse(fixedJson);
 
@@ -188,18 +174,25 @@ export class SiliconFlowTaskPlanningService {
     }
 
     const title = typeof task.title === 'string' ? task.title.trim() : '';
-    let description = typeof task.description === 'string' ? task.description.trim() : '';
+    let description =
+      typeof task.description === 'string' ? task.description.trim() : '';
 
     const priorityValues = ['low', 'medium', 'high'];
     let priority = task.priority;
 
-    if (typeof description === 'string' && priorityValues.includes(description.toLowerCase())) {
+    if (
+      typeof description === 'string' &&
+      priorityValues.includes(description.toLowerCase())
+    ) {
       priority = description;
       description = '';
     }
 
     if (typeof priority === 'string') {
-      priority = priority.toLowerCase().replace(/low+/, 'low').replace(/high+/, 'high');
+      priority = priority
+        .toLowerCase()
+        .replace(/low+/, 'low')
+        .replace(/high+/, 'high');
     }
 
     if (!isTaskPriority(priority)) {
