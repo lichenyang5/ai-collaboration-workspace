@@ -129,13 +129,14 @@ describe('SiliconFlowTaskPlanningService', () => {
   it('rejects an invalid task draft response without exposing the upstream payload', async () => {
     const fetchMock = jest
       .fn<Promise<Response>, [RequestInfo | URL, RequestInit?]>()
-      .mockResolvedValue(
-        new Response(
-          JSON.stringify({
-            choices: [{ message: { content: '{"tasks":[]}' } }],
-          }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
-        ),
+      .mockImplementation(
+        async () =>
+          new Response(
+            JSON.stringify({
+              choices: [{ message: { content: '{"tasks":[]}' } }],
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          ),
       );
     global.fetch = fetchMock as typeof fetch;
     const service = new SiliconFlowTaskPlanningService();
@@ -143,5 +144,63 @@ describe('SiliconFlowTaskPlanningService', () => {
     await expect(
       service.generateTaskDrafts('完成项目接口设计并联调'),
     ).rejects.toThrow('AI 服务暂时不可用');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns valid drafts from a fresh response after one invalid result', async () => {
+    const fetchMock = jest
+      .fn<Promise<Response>, [RequestInfo | URL, RequestInit?]>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            choices: [{ message: { content: '{"tasks":[]}' } }],
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content:
+                    '{"tasks":[{"title":"设计接口","description":"完成接口清单","priority":"high"}]}',
+                },
+              },
+            ],
+          }),
+        ),
+      );
+    global.fetch = fetchMock as typeof fetch;
+
+    await expect(
+      new SiliconFlowTaskPlanningService().generateTaskDrafts('设计接口'),
+    ).resolves.toEqual([
+      {
+        title: '设计接口',
+        description: '完成接口清单',
+        priority: TaskPriority.High,
+      },
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('maps unrepairable task JSON to the public error after exhausting retries', async () => {
+    const fetchMock = jest
+      .fn<Promise<Response>, [RequestInfo | URL, RequestInit?]>()
+      .mockImplementation(
+        async () =>
+          new Response(
+            JSON.stringify({
+              choices: [{ message: { content: '}' } }],
+            }),
+          ),
+      );
+    global.fetch = fetchMock as typeof fetch;
+
+    await expect(
+      new SiliconFlowTaskPlanningService().generateTaskDrafts('设计接口'),
+    ).rejects.toThrow('AI 服务暂时不可用');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
